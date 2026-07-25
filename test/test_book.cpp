@@ -745,6 +745,11 @@ TEST(BookBand, RebasingSurvivesATrendReversal) {
 // ---------------------------------------------------------------------------
 
 TEST(BookAllocation, InBandHotPathAllocatesNothingAcrossAMillionOperations) {
+  if (!ob::testing::counting_is_active()) {
+    GTEST_SKIP() << "operator new replacement is compiled out under ThreadSanitizer, so the "
+                    "counter would read zero for the wrong reason";
+  }
+
   TestBook::Config config = make_config();
   config.arena_capacity = 8192;
   const std::unique_ptr<TestBook> book = std::make_unique<TestBook>(config);
@@ -795,6 +800,10 @@ TEST(BookAllocation, InBandHotPathAllocatesNothingAcrossAMillionOperations) {
 // where the zero-allocation guarantee stops. A claim with no stated boundary is
 // not a claim.
 TEST(BookAllocation, ColdPathDoesAllocateAndSaysSo) {
+  if (!ob::testing::counting_is_active()) {
+    GTEST_SKIP() << "operator new replacement is compiled out under ThreadSanitizer";
+  }
+
   const std::unique_ptr<TestBook> book = make_book();
   ASSERT_EQ(book->add(make_add(1, Side::buy, 0, 10)), AddStatus::ok);
 

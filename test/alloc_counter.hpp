@@ -17,6 +17,13 @@
 // carries static_asserts proving that no type this book allocates is in that
 // category. If one of those assertions ever fires, the over-aligned overloads
 // need replacing too or the counter will silently undercount.
+//
+// ThreadSanitizer note: tsan's runtime defines its own operator new and delete as
+// strong symbols, so a replacement in this file is a duplicate definition and the
+// link fails. AddressSanitizer does not have this problem because its versions are
+// weak. Under tsan the replacements are therefore compiled out and
+// counting_is_active returns false, so that tests which depend on the counter skip
+// with a reason rather than passing vacuously against a counter stuck at zero.
 namespace ob::testing {
 
 struct AllocationStats {
@@ -28,6 +35,12 @@ struct AllocationStats {
 [[nodiscard]] AllocationStats allocation_stats() noexcept;
 
 void reset_allocation_stats() noexcept;
+
+// False when the operator new replacement was compiled out, which currently means
+// a ThreadSanitizer build. A test that asserts on allocation counts must check
+// this and skip, because otherwise it compares a counter that never moves against
+// an expectation of zero and passes for the wrong reason.
+[[nodiscard]] bool counting_is_active() noexcept;
 
 // Scoped reset, so a measured region cannot forget to establish its baseline.
 class AllocationGuard {

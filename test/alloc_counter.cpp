@@ -4,6 +4,26 @@
 #include <cstdlib>
 #include <new>
 
+// ThreadSanitizer's runtime defines operator new and delete as strong symbols, so
+// replacing them here makes the link fail with a duplicate definition. There is no
+// way to have both, so under tsan the replacements are omitted and the counter is
+// reported inactive. AddressSanitizer's versions are weak, so asan keeps full
+// coverage and remains the sanitizer that actually exercises this file.
+// NOLINTBEGIN(cppcoreguidelines-macro-usage) a constexpr constant cannot drive
+// #if, and whether these definitions exist at all is the thing being decided.
+#ifdef __SANITIZE_THREAD__
+#define OB_ALLOC_COUNTER_ENABLED 0
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define OB_ALLOC_COUNTER_ENABLED 0
+#endif
+#endif
+
+#ifndef OB_ALLOC_COUNTER_ENABLED
+#define OB_ALLOC_COUNTER_ENABLED 1
+#endif
+// NOLINTEND(cppcoreguidelines-macro-usage)
+
 // Replacing the global operator new means doing three things clang-tidy exists to
 // discourage: keeping mutable global state, calling malloc and free directly, and
 // handing back raw owning pointers. There is no version of this file that avoids
@@ -25,6 +45,8 @@ std::uint64_t g_allocations = 0;
 std::uint64_t g_deallocations = 0;
 std::uint64_t g_bytes = 0;
 
+#if OB_ALLOC_COUNTER_ENABLED
+
 // malloc(0) may legally return nullptr, which operator new must not do, so a
 // zero sized request is rounded up to one byte.
 void* counted_malloc(std::size_t size) noexcept {
@@ -39,6 +61,8 @@ void counted_free(void* memory) noexcept {
   }
   std::free(memory);
 }
+
+#endif  // OB_ALLOC_COUNTER_ENABLED
 
 }  // namespace
 
@@ -55,7 +79,13 @@ void reset_allocation_stats() noexcept {
   g_bytes = 0;
 }
 
+bool counting_is_active() noexcept {
+  return OB_ALLOC_COUNTER_ENABLED != 0;
+}
+
 }  // namespace ob::testing
+
+#if OB_ALLOC_COUNTER_ENABLED
 
 void* operator new(std::size_t size) {
   void* const memory = counted_malloc(size);
@@ -104,5 +134,7 @@ void operator delete(void* memory, const std::nothrow_t& /*tag*/) noexcept {
 void operator delete[](void* memory, const std::nothrow_t& /*tag*/) noexcept {
   counted_free(memory);
 }
+
+#endif  // OB_ALLOC_COUNTER_ENABLED
 
 // NOLINTEND(cppcoreguidelines-no-malloc,cppcoreguidelines-owning-memory,cppcoreguidelines-avoid-non-const-global-variables)

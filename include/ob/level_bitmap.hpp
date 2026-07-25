@@ -95,23 +95,51 @@ class LevelBitmap {
   [[nodiscard]] bool empty() const noexcept { return top_ == 0U; }
 
   // Lowest occupied level, which is the best ask on the sell side.
+  //
+  // The two range checks are bounds enforcement, not dead code. countr_zero and
+  // bit_width can each return up to 63, and the invariant that stops the derived
+  // indices exceeding their arrays is that the top word never carries a bit at or
+  // above MIDDLE_WORDS. That invariant is real but the optimiser cannot see it:
+  // GCC 13 at -O3 concluded the bottom tier could be indexed at 64 on a 64 word
+  // array and refused to compile under -Werror=array-bounds. Stating the bound
+  // explicitly is both the fix and the documentation. Neither branch is ever
+  // taken, and where MIDDLE_WORDS is 64 the first folds away entirely.
   [[nodiscard]] std::size_t lowest_set() const noexcept {
     if (top_ == 0U) {
       return NONE;
     }
+
     const auto middle = static_cast<std::size_t>(std::countr_zero(top_));
+    if (middle >= MIDDLE_WORDS) {
+      return NONE;
+    }
+
     const std::size_t bottom =
         (middle << 6U) + static_cast<std::size_t>(std::countr_zero(middle_[middle]));
+    if (bottom >= BOTTOM_WORDS) {
+      return NONE;
+    }
+
     return (bottom << 6U) + static_cast<std::size_t>(std::countr_zero(bottom_[bottom]));
   }
 
-  // Highest occupied level, which is the best bid on the buy side.
+  // Highest occupied level, which is the best bid on the buy side. Same bounds
+  // reasoning as lowest_set.
   [[nodiscard]] std::size_t highest_set() const noexcept {
     if (top_ == 0U) {
       return NONE;
     }
+
     const std::size_t middle = highest_bit(top_);
+    if (middle >= MIDDLE_WORDS) {
+      return NONE;
+    }
+
     const std::size_t bottom = (middle << 6U) + highest_bit(middle_[middle]);
+    if (bottom >= BOTTOM_WORDS) {
+      return NONE;
+    }
+
     return (bottom << 6U) + highest_bit(bottom_[bottom]);
   }
 
