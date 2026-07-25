@@ -232,6 +232,177 @@ needs. Cross-thread event consumption is a real design, but it belongs with
 multi-symbol sharding, which is explicitly out of scope. If that scope changed,
 this is the type to change and the change is local.
 
+## Open addressing over std::unordered_map
+
+**Decision.** A custom open addressing table with linear probing, a power of two
+capacity, Fibonacci hashing, and backward shift deletion. Maximum load factor
+0.5. Keys and values live in separate arrays.
+
+**Alternatives considered.** `std::unordered_map`, and a tombstone based open
+addressing table.
+
+**Reasoning on the container.** `std::unordered_map` is specified as buckets of
+nodes, so a lookup dereferences a bucket pointer and then walks a chain of
+separately allocated nodes. Cancel is one of the three hot operations and it
+begins with exactly one of these lookups. It also allocates on every insert,
+which the zero allocation rule forbids outright.
+
+**Reasoning on backward shift.** Tombstones are easier and they are a trap here.
+A tombstone keeps counting toward probe length forever, so a book that cancels
+heavily, which is every real book, degrades permanently. Backward shift restores
+the table to the state it would have had if the key had never been inserted. The
+subtlety is that an entry may only move back into the hole if its ideal slot does
+not lie cyclically within the range being closed, and
+`test_book.cpp: EveryKeyStaysReachableAcrossHeavyChurn` exists because a naive
+version of that condition passes every simple test and loses keys under churn.
+
+**Reasoning on the load factor.** For linear probing the expected probe count on a
+successful lookup is about `(1 + 1/(1-a)^2)/2`: roughly 2.5 probes at 0.5, 8.5 at
+0.75, and 50 at 0.9. The knee is sharp and the memory saved by a denser table is
+trivial next to the order arena. Measured at the design point the table reports a
+mean probe count of 1.0 and a lookup costs 2.4 ns.
+
+**Reasoning on the structure of arrays split.** Probing reads nothing but keys
+until it finds its match. Contiguous 8-byte keys put eight candidates in every
+line fetched; interleaving key and value would put four per line and waste half of
+each fetch on values belonging to keys that did not match.
+
+**Reasoning on the hash.** Identity masking is tempting because ITCH order
+reference numbers arrive nearly sequential, which identity masking would place
+with no collisions at all. It fails when the venue's numbering has a stride
+sharing a factor with the capacity, which is a property of the feed rather than of
+this code, and the failure is silent clustering. One multiply and one shift
+removes the dependency on someone else's numbering scheme.
+
+## Hierarchical bitmaps for best price
+
+**Decision.** A three tier occupancy bitmap per side. One bit per level, one bit
+per bottom tier word, and a single top word. Best price is a `countr_zero` or
+`bit_width` at each tier.
+
+**Alternatives considered.**
+
+1. **Scan outward from the last known best.** O(distance), and the distance is
+   unbounded. One large cancel at the touch can leave the next occupied level
+   thousands of ticks away, turning a cancel into a scan of tens of kilobytes at
+   exactly the moment the book is busiest.
+2. **Cache best bid and best ask as values.** O(1) to read, but repairing them
+   after the best level empties needs the scan above, so it moves the cost rather
+   than removing it, and it adds a second source of truth that can disagree.
+3. **A tree or heap keyed by price.** O(log n) with pointer chasing and
+   allocation, which is the design this project exists to beat.
+
+**Reasoning.** Three dependent loads and three single cycle instructions, and the
+cost does not depend on how far apart the occupied levels are. At the default band
+the whole structure is 8 KiB per side, so it stays resident.
+
+**The invariant, and why it is the sharpest edge here.** A bit is set if and only
+if the level has a non-zero order count. Occupancy is updated only on empty to
+occupied transitions and back, never on a quantity change, which keeps the number
+of call sites that can break it to two per side. If it breaks, the symptom is
+`best_bid` reporting a price with no liquidity behind it.
+
+## Band rebasing, and what it costs
+
+**Decision.** The band recentres on the market when an operation touches a level
+within an eighth of the band of either edge. Rebasing moves only occupied levels,
+found by walking the bitmap, so it costs O(occupied levels) rather than O(band).
+Orders store absolute tick prices, so a rebase moves levels without touching a
+single order field.
+
+**A rebase either completes in full or does not happen.** This is not a stylistic
+preference. Evicting a level to the overflow container can fail when the cold cap
+is full, and discovering that partway through the shift leaves no correct
+recovery: the orders cannot be dropped and the band cannot be left half moved. So
+the evictions are counted against the available cold capacity before any state is
+touched, and the whole rebase is abandoned if it will not fit. An abandoned rebase
+is safe: the band simply stays where it is.
+
+The first implementation did not do this. It handled a failed eviction by leaving
+the level where it was and continuing the shift, which silently misfiled every
+order in that level, because the level then answered to whatever price its slot
+mapped to under the new base. See the bug log below.
+
+**What it costs when it triggers.** A rebase is a scan of the occupancy bitmap
+plus a copy of each occupied level, plus an ordered container operation for every
+level that crosses the boundary in either direction. It is far more expensive than
+any hot operation and it will be visible in the p99.9 and p99.99 tail. The margin
+is set at an eighth of the band, roughly 8192 ticks at the default size, so that a
+normal session never reaches it.
+
+## The overflow cold path
+
+**Decision.** Prices outside the band go to a `std::map` keyed by tick, capped at a
+configurable number of levels per side, hidden behind a pointer so that `<map>`
+never enters a hot header.
+
+**Reasoning.** The band cannot be unbounded and a price a million ticks away has to
+go somewhere. Making it slow and correct is better than rejecting it. The cap is
+what keeps the memory bounded and known at construction rather than unbounded at
+runtime; beyond it, an add is rejected with `band_overflow`.
+
+**A cold level is not necessarily worse than the band's best.** The first version
+assumed it was, reasoning that rebasing keeps the band centred on the market. That
+assumption is unenforceable: two resting prices further apart than the band is wide
+cannot both be in the band, and if the better one is outside then the band's best
+is not the book's best. `best()` now compares both, guarded by a cached count so
+that the ordered container is untouched when nothing is cold. See the bug log.
+
+**On terminating rather than returning an error.** The cold path allocates, so it
+can in principle throw `bad_alloc`, and the functions that reach it are marked
+`noexcept`, which turns that into a terminate. This is deliberate. An order book
+that cannot store an order has no correct alternative to failing loudly, and the
+condition means the machine is out of memory, not that the caller did anything a
+caller could handle.
+
+## Arena capacity is a cache decision
+
+Every arena slot is 40 bytes and the id map adds another 24 per slot at the design
+load factor. So 2^16 orders costs roughly 4 MiB across the two, and 2^20 costs
+roughly 64 MiB.
+
+Measured on a machine with 2.5 MiB L2 and 8 MiB L3, an add costs about 18 ns while
+that working set fits in L2 and about 130 ns when it does not, with the algorithmic
+work identical at every point. Oversizing the arena is therefore not free headroom,
+it is a seven times slowdown on every operation. The default is sized to a busy
+single symbol rather than to the largest book imaginable. The curve is published in
+BENCHMARKS.md.
+
+## Bugs caught by the tests, and what they teach
+
+Recorded because a test suite that never caught anything is not evidence that the
+code is correct, only that the tests are weak.
+
+**1. Best price ignored a better cold level.** `best()` returned the band's best
+whenever the band held anything, on the assumption that rebasing keeps every cold
+level strictly worse. Two bids a million ticks apart falsified it: the far one was
+the real best bid and the book reported the near one. Caught by
+`BookBand.PricesOutsideTheBandReachTheColdPath`. The lesson is that an invariant
+maintained by a heuristic is not an invariant. Rebasing is best effort, so nothing
+downstream may treat its outcome as guaranteed.
+
+**2. A half completed rebase misfiled every order in a stranded level.** When an
+eviction to cold failed against a full cap, the code left the level in place and
+carried on shifting the band, so the level's slot then mapped to a different price.
+Found by tracing the first bug rather than by a test, then pinned by
+`BookBand.RebaseIsAbandonedRatherThanLeftHalfDone`. The lesson is the fill-or-kill
+lesson in a different costume: an operation that mutates many structures must
+establish that it can finish before it starts.
+
+**3. A benchmark measured DRAM and called it an add.** The first microbenchmark
+reported 54 ns for an add into an existing level. The arena was sized at 2^20,
+putting 64 MiB of working set against an 8 MiB L3, so the number was a memory
+latency. Caught by sweeping the arena size instead of accepting the number. The
+lesson is that an unexplained benchmark result is not a result.
+
+**4. A benchmark's name did not match what it measured.** `bm_add_empty_level`
+claimed to isolate the cost of the occupancy bitmap transition, and it came out
+faster than a plain add, which is impossible if it does strictly more work. It
+cancelled each order immediately, so the book stayed at one live order and
+everything sat in L1 while the comparison benchmark grew to fill its arena. Renamed
+to say what it does. The lesson is to check that a benchmark's result is possible
+before quoting it.
+
 ## Dependency justifications
 
 The global constraint is that dependencies stay minimal and vendored through CMake

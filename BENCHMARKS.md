@@ -1,15 +1,97 @@
 # Benchmarks
 
-**No numbers are published in this document yet.** The measurement harness lands
-in Phase 4. What follows is the methodology it will implement, recorded before any
-measurement is taken so that the method cannot be chosen retroactively to suit a
-result.
+**The headline results in this document are not yet trustworthy.** The disciplined
+harness lands in Phase 4. What is published below is a first look from Phase 1,
+labelled with everything wrong with it, plus the methodology Phase 4 will
+implement, recorded before that measurement is taken so the method cannot be chosen
+retroactively to suit a result.
 
 An unmeasured performance claim is worthless, and a measured claim without its
 methodology is not much better. Both the numbers and the conditions that produced
 them are deliverables here.
 
-## What will be measured
+## Phase 1 first look
+
+**Measurement conditions, all of which are wrong in ways that matter.**
+
+| | |
+| --- | --- |
+| CPU | Intel Core Ultra 5 238V, 8 cores, reported at 3110 MHz |
+| Caches | L1d 48 KiB per core, L2 2560 KiB per core, L3 8192 KiB |
+| OS | Windows 11, no core isolation, no frequency pinning |
+| Toolchain | GCC 16.1.0, `-O3 -march=native -fno-omit-frame-pointer` |
+| Harness | Google Benchmark 1.9.4, 5 repetitions, 1.5 s minimum per repetition |
+
+Every one of the following is a reason not to quote these numbers:
+
+- **No core pinning.** This is a hybrid CPU with performance and efficiency cores.
+  A thread the scheduler moves between the two changes speed for reasons that have
+  nothing to do with the code. Windows offers no equivalent of `isolcpus`.
+- **No frequency control.** Turbo and scaling are both active and undetected.
+- **Run to run variance is large.** The coefficient of variation reaches 20 percent
+  on the add benchmark. Anything below a factor of two difference between two rows
+  here is inside the noise.
+- **No hardware cache counters.** `perf stat` has no Windows equivalent, so the
+  cache behaviour below is inferred from a working set sweep rather than measured
+  from the PMU.
+
+### Operation costs
+
+Arena sized to 65536 orders, a busy but realistic single symbol depth. CPU time,
+median of 5 repetitions.
+
+| Operation | ns | Notes |
+| --- | --- | --- |
+| Order id lookup | 2.3 | Load factor 0.50, mean probe count 1.0 |
+| Cancel from level head | 18.7 | Includes lookup, unlink, bitmap clear, arena free |
+| Add plus cancel round trip, all L1 resident | 18.8 | Best case, not comparable to the row below |
+| Add to an existing level | 22.8 | Coefficient of variation 20 percent |
+| Best bid query | 13.4 | Higher than the three loads and three bit operations it performs, unexplained, see below |
+
+### Working set sweep
+
+The same add operation, swept over arena capacity. The algorithmic work is
+identical at every point, so the entire shape of this curve is cache behaviour.
+This is the experiment that stands in for `perf stat` cache miss counters on a host
+that has no PMU access.
+
+| Arena capacity | Arena size | ns per add |
+| --- | --- | --- |
+| 4 096 | 0.16 MiB | 18.3 |
+| 16 384 | 0.63 MiB | 18.8 |
+| 65 536 | 2.5 MiB | 36.0 |
+| 262 144 | 10 MiB | 102 |
+| 1 048 576 | 40 MiB | 130 |
+
+L2 on this machine is 2.5 MiB, and the curve breaks exactly there. The
+interpretation is that the book's own work is about 18 ns and everything above
+that is memory latency.
+
+This sweep exists because the first version of the benchmark used a 2^20 slot
+arena and reported 54 ns for an add. That number was a DRAM latency wearing an
+add's name. The default arena size was reduced to 65536 as a result, which is
+documented in DESIGN.md as a cache decision rather than a capacity one.
+
+### What is not yet explained
+
+The best bid query at 13.4 ns is slower than its instruction count justifies. It
+performs three dependent loads into structures totalling 8 KiB per side, which
+should be resident, plus three bit manipulation instructions. Candidate
+explanations are the `std::optional` return being materialised rather than kept in
+registers, and the benchmark's `DoNotOptimize` barrier forcing a store. This is
+recorded as open rather than quietly dropped, and Phase 4 resolves it.
+
+### Reproduction
+
+```bash
+cmake --preset release
+cmake --build --preset release
+./out/build/release/ob_micro_bench --benchmark_repetitions=5 --benchmark_report_aggregates_only=true
+```
+
+## What Phase 4 adds
+
+### What will be measured
 
 **Microbenchmarks**, via Google Benchmark, one case each for:
 
@@ -37,7 +119,7 @@ numbers published. The speedup ratio is only meaningful alongside a mechanical
 explanation, so `perf stat` counters accompany it: cycles, instructions, IPC, cache
 references, cache misses, and branch misses for both implementations.
 
-## Timing methodology
+### Timing methodology
 
 `rdtscp` with a TSC frequency calibrated at startup against
 `std::chrono::steady_clock`, with a documented fallback to `steady_clock` where the
@@ -47,7 +129,7 @@ counter that changes rate with frequency. `rdtscp` is used rather than `rdtsc`
 because it orders against prior loads, and the measured region is fenced so the
 timestamp is not reordered into or out of it.
 
-## Environment discipline
+### Environment discipline
 
 Every published result will carry the conditions that produced it:
 
@@ -62,7 +144,7 @@ Every published result will carry the conditions that produced it:
 - Each configuration run multiple times, with run-to-run variance reported. A
   single run is a sample of one and the spread is part of the result.
 
-## Reproduction
+### Reproduction command
 
 The exact command will be recorded here alongside the results table, so that a
 reader can rerun it rather than trust it.

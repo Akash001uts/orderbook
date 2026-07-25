@@ -53,8 +53,9 @@ target_compile_options(ob_flags INTERFACE
   $<$<CONFIG:Release,RelWithDebInfo>:-O3>
   $<$<CONFIG:Release,RelWithDebInfo>:-fno-omit-frame-pointer>)
 
+include(CheckCXXCompilerFlag)
+
 if(OB_NATIVE_ARCH)
-  include(CheckCXXCompilerFlag)
   check_cxx_compiler_flag(-march=native OB_HAS_MARCH_NATIVE)
   if(OB_HAS_MARCH_NATIVE)
     target_compile_options(ob_flags INTERFACE
@@ -67,24 +68,31 @@ endif()
 # ---------------------------------------------------------------------------
 # Core library.
 #
-# Header only at present: everything in include/ob is a data definition or an
-# inline template. It becomes a static library once there is a translation unit
-# whose code does not belong in a header.
+# The hot path lives in headers because it must inline: Book is a template over
+# the band size and its operations are a handful of instructions each, so a call
+# across a translation unit boundary would cost more than the work. The only
+# translation unit is the overflow cold path, which is deliberately out of line
+# so that <map> cannot be reached from any header the hot path includes.
 # ---------------------------------------------------------------------------
-add_library(ob INTERFACE)
+add_library(ob STATIC
+  src/book.cpp)
 
-target_include_directories(ob INTERFACE
+target_include_directories(ob PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 
-target_link_libraries(ob INTERFACE ob_flags)
+target_link_libraries(ob PUBLIC ob_flags)
 
 set(OB_PUBLIC_HEADERS
   include/ob/types.hpp
   include/ob/order.hpp
+  include/ob/order_pool.hpp
+  include/ob/order_map.hpp
   include/ob/price_level.hpp
+  include/ob/level_bitmap.hpp
+  include/ob/book.hpp
   include/ob/events.hpp)
 
-target_sources(ob INTERFACE FILE_SET HEADERS
+target_sources(ob PUBLIC FILE_SET HEADERS
   BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/include
   FILES ${OB_PUBLIC_HEADERS})
 
@@ -122,19 +130,90 @@ if(OB_BUILD_BENCH)
   set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
   set(BENCHMARK_ENABLE_GTEST_TESTS OFF CACHE BOOL "" FORCE)
   set(BENCHMARK_INSTALL_DOCS OFF CACHE BOOL "" FORCE)
+  set(BENCHMARK_ENABLE_WERROR OFF CACHE BOOL "" FORCE)
   FetchContent_MakeAvailable(benchmark)
+
+  # Google Benchmark v1.9.4 compiles its own sources with -pedantic-errors, added
+  # unconditionally rather than behind BENCHMARK_ENABLE_WERROR, and its public
+  # header tests __COUNTER__ in a preprocessor conditional. Clang 20 and newer
+  # report __COUNTER__ as a C2y extension, so the two combine to break the
+  # dependency's own build on a new Clang. Disabling that one diagnostic on the
+  # dependency's targets is the least invasive fix available and it does not touch
+  # the flags applied to this project's code.
+  check_cxx_compiler_flag(-Wc2y-extensions OB_HAS_WC2Y_EXTENSIONS)
+  if(OB_HAS_WC2Y_EXTENSIONS)
+    foreach(bm_target benchmark benchmark_main)
+      if(TARGET ${bm_target})
+        target_compile_options(${bm_target} PRIVATE -Wno-c2y-extensions)
+      endif()
+    endforeach()
+  endif()
 endif()
+
+# Force the fetched dependencies' interface includes to be treated as system
+# headers by anything that consumes them.
+#
+# SYSTEM on FetchContent_Declare marks the subdirectory, but it does not reliably
+# reach the interface include directories that a consuming target inherits, so
+# warnings from a dependency's header still surface in our translation unit. Google
+# Benchmark is the concrete case: benchmark.h uses __COUNTER__, which -Wpedantic
+# reports as a non-standard extension, and with -Werror that failed the bench
+# target on Clang. The warning is legitimate and it is not ours to fix.
+#
+# Re-declaring the same directories as SYSTEM is the portable form of this. The
+# SYSTEM target property would be tidier but it needs CMake 3.25, and this project
+# targets 3.24.
+function(ob_mark_dependency_system target_name)
+  if(NOT TARGET ${target_name})
+    return()
+  endif()
+  get_target_property(dep_includes ${target_name} INTERFACE_INCLUDE_DIRECTORIES)
+  if(dep_includes)
+    target_include_directories(${target_name} SYSTEM INTERFACE ${dep_includes})
+  endif()
+endfunction()
+
+foreach(dep_target gtest gtest_main benchmark benchmark_main)
+  ob_mark_dependency_system(${dep_target})
+endforeach()
 
 # ---------------------------------------------------------------------------
 # Tests.
 # ---------------------------------------------------------------------------
 if(OB_BUILD_TESTS)
   add_executable(ob_tests
-    test/test_types.cpp)
+    test/alloc_counter.cpp
+    test/test_types.cpp
+    test/test_book.cpp)
 
+  target_include_directories(ob_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test)
   target_link_libraries(ob_tests PRIVATE ob ob_flags GTest::gtest_main)
 
   gtest_discover_tests(ob_tests
     DISCOVERY_MODE PRE_TEST
     PROPERTIES LABELS unit)
+endif()
+
+# ---------------------------------------------------------------------------
+# Benchmarks.
+# ---------------------------------------------------------------------------
+if(OB_BUILD_BENCH)
+  # The BENCHMARK registration macro expands __COUNTER__, which -Wpedantic reports
+  # as a non-standard extension. Marking the dependency's includes as system does
+  # not help: the diagnostic fires because the macro is expanded in our translation
+  # unit, not because the header was parsed. So the single diagnostic is disabled
+  # for benchmark targets only, and every other warning stays an error there.
+  #
+  # The flag is probed in its positive form because compilers accept an unknown
+  # -Wno-anything silently, which would make a check of the negative form always
+  # succeed and then fail the build on -Wunknown-warning-option.
+  add_library(ob_bench_flags INTERFACE)
+  if(OB_HAS_WC2Y_EXTENSIONS)
+    target_compile_options(ob_bench_flags INTERFACE -Wno-c2y-extensions)
+  endif()
+
+  add_executable(ob_micro_bench
+    bench/micro_bench.cpp)
+
+  target_link_libraries(ob_micro_bench PRIVATE ob ob_flags ob_bench_flags benchmark::benchmark)
 endif()

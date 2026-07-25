@@ -13,21 +13,39 @@ rather than a smoke test.
 
 ## Status
 
-Phase 0 of 6 complete. The type layer, event model, build system, and CI are in
-place and green on GCC and Clang.
+Phase 1 of 6 complete. The book, the arena, the id map, the occupancy bitmaps, and
+band rebasing are built and tested, green on GCC and Clang across debug, release,
+and all three sanitizers.
 
 | Phase | Scope | State |
 | --- | --- | --- |
 | 0 | Scaffold, strong types, event model, presets, CI | complete |
-| 1 | Flat direct-indexed book, order arena, open-addressing id map, bitmap best price | not started |
+| 1 | Flat direct-indexed book, order arena, open-addressing id map, bitmap best price | complete |
 | 2 | Matching engine, order types, differential test against a `std::map` oracle | not started |
 | 3 | ITCH 5.0 zero-copy parser, replay driver, synthetic file generator | not started |
 | 4 | Microbenchmarks, HdrHistogram latency harness, `std::map` baseline comparison | not started |
 | 5 | Market maker, queue position estimator, P&L attribution, markouts | not started |
 | 6 | Documentation pass | not started |
 
-Benchmark numbers are published in [BENCHMARKS.md](BENCHMARKS.md) once Phase 4
-lands. Nothing is claimed here that has not been measured.
+A first look at the numbers is in [BENCHMARKS.md](BENCHMARKS.md), published with
+the reasons it is not yet trustworthy. The disciplined harness lands in Phase 4.
+Nothing is claimed here that has not been measured.
+
+### Measured so far
+
+| | |
+| --- | --- |
+| `sizeof(Order)` | 40 bytes, 32-bit arena indices rather than pointers |
+| `sizeof(PriceLevel)` | 24 bytes, 2.67 levels per cache line |
+| Footprint at defaults | 19.3 MiB: 3 MiB band, 16 KiB bitmaps, 10 MiB arena, 6 MiB id map |
+| Id map load factor | 0.50, mean probe count 1.0 |
+| Order id lookup | 2.3 ns |
+| Cancel from level head | 18.7 ns |
+| Add to an existing level | 22.8 ns |
+
+Measured on Windows with no core pinning on a hybrid CPU, so treat differences
+under a factor of two as noise. The conditions are spelled out in full in
+[BENCHMARKS.md](BENCHMARKS.md).
 
 ## Build and run
 

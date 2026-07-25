@@ -1,0 +1,204 @@
+#pragma once
+
+#include <bit>
+#include <cassert>
+#include <cstdint>
+#include <vector>
+
+#include "ob/types.hpp"
+
+namespace ob {
+
+// Open addressing map from OrderId to arena index, used by cancel and modify.
+//
+// Why not std::unordered_map: it is specified as a bucket-of-nodes container, so
+// every lookup dereferences a bucket pointer and then walks a chain of separately
+// allocated nodes. Cancel is one of the three hot operations and it starts with
+// exactly one of these lookups, so the difference between one cache line and a
+// pointer chase per cancel is the difference between the design working and not.
+// It also allocates per insert, which the zero-allocation rule forbids outright.
+//
+// Storage is a structure of arrays: keys in one array, values in another. Linear
+// probing reads nothing but keys until it finds its match, so keeping keys
+// contiguous puts eight candidates in every 64-byte line fetched. Interleaving
+// key and value would put four per line and waste half of each fetch on values
+// belonging to keys that did not match.
+//
+// A key of zero marks an empty slot, so no separate occupancy array or tombstone
+// byte is needed. OrderId zero is reserved and rejected on insert. Real venues do
+// not issue it: ITCH 5.0 order reference numbers start at one.
+//
+// Deletion is by backward shift, not by tombstone. Tombstones degrade a linear
+// probing table permanently: they keep counting toward the probe length forever,
+// so a long-lived book that cancels heavily, which is every real book, slowly
+// turns every lookup into a scan. Backward shift restores the table to the exact
+// state it would have had if the deleted key were never inserted.
+class OrderIdMap {
+ public:
+  // Capacity is rounded up to a power of two at or above twice expected_orders,
+  // giving a maximum load factor of 0.5.
+  //
+  // Why 0.5: for linear probing the expected probe count on a successful lookup
+  // is about (1 + 1/(1-a)^2)/2. At a load factor of 0.5 that is 2.5 probes, all
+  // of which land in the same or the adjacent cache line. At 0.75 it is 8.5, and
+  // at 0.9 it is 50. The knee is sharp and it is not worth being near it: the
+  // memory saved by a denser table is trivial next to the order arena, and the
+  // cost of being wrong is paid on every single cancel.
+  explicit OrderIdMap(std::uint32_t expected_orders) {
+    const std::uint64_t wanted = static_cast<std::uint64_t>(expected_orders) * 2U;
+    std::uint64_t capacity = 64;
+    while (capacity < wanted) {
+      capacity <<= 1U;
+    }
+
+    keys_.assign(static_cast<std::size_t>(capacity), 0U);
+    values_.assign(static_cast<std::size_t>(capacity), INVALID_INDEX);
+    mask_ = static_cast<std::size_t>(capacity) - 1U;
+    shift_ = static_cast<unsigned>(64 - std::countr_zero(capacity));
+  }
+
+  // False on a duplicate key, on the reserved zero key, or when the table is at
+  // its load limit. The caller decides what that means; the map does not grow,
+  // because growing means allocating.
+  [[nodiscard]] bool insert(OrderId id, ArenaIndex index) noexcept {
+    if (id.raw() == 0U || size_ > mask_ / 2U) {
+      return false;
+    }
+
+    std::size_t slot = slot_for(id);
+    while (keys_[slot] != 0U) {
+      if (keys_[slot] == id.raw()) {
+        return false;
+      }
+      slot = (slot + 1U) & mask_;
+    }
+
+    keys_[slot] = id.raw();
+    values_[slot] = index;
+    ++size_;
+    return true;
+  }
+
+  [[nodiscard]] ArenaIndex find(OrderId id) const noexcept {
+    if (id.raw() == 0U) {
+      return INVALID_INDEX;
+    }
+
+    std::size_t slot = slot_for(id);
+    while (keys_[slot] != 0U) {
+      if (keys_[slot] == id.raw()) {
+        return values_[slot];
+      }
+      slot = (slot + 1U) & mask_;
+    }
+    return INVALID_INDEX;
+  }
+
+  [[nodiscard]] bool erase(OrderId id) noexcept {
+    if (id.raw() == 0U) {
+      return false;
+    }
+
+    std::size_t hole = slot_for(id);
+    while (keys_[hole] != 0U && keys_[hole] != id.raw()) {
+      hole = (hole + 1U) & mask_;
+    }
+    if (keys_[hole] == 0U) {
+      return false;
+    }
+
+    // Opening the hole before the scan matters for termination as well as for
+    // clarity: it guarantees the scan below meets an empty slot even in the
+    // pathological case where it wraps all the way round.
+    keys_[hole] = 0U;
+    values_[hole] = INVALID_INDEX;
+    --size_;
+
+    std::size_t probe = hole;
+    while (true) {
+      probe = (probe + 1U) & mask_;
+      if (keys_[probe] == 0U) {
+        break;
+      }
+
+      // An entry may only move back into the hole if its ideal slot does not lie
+      // cyclically within (hole, probe]. If it did, moving it back past its own
+      // ideal slot would put it before the point where a lookup starts probing,
+      // and the key would become unreachable. This is the whole subtlety of
+      // backward shift deletion and it is why tombstones are the common choice.
+      const std::size_t ideal = slot_for(OrderId{keys_[probe]});
+      const bool ideal_inside =
+          (hole <= probe) ? (hole < ideal && ideal <= probe) : (hole < ideal || ideal <= probe);
+      if (ideal_inside) {
+        continue;
+      }
+
+      keys_[hole] = keys_[probe];
+      values_[hole] = values_[probe];
+      keys_[probe] = 0U;
+      values_[probe] = INVALID_INDEX;
+      hole = probe;
+    }
+
+    return true;
+  }
+
+  [[nodiscard]] std::uint32_t size() const noexcept { return size_; }
+
+  [[nodiscard]] std::size_t capacity() const noexcept { return mask_ + 1U; }
+
+  [[nodiscard]] double load_factor() const noexcept {
+    return static_cast<double>(size_) / static_cast<double>(capacity());
+  }
+
+  [[nodiscard]] std::size_t memory_bytes() const noexcept {
+    return (keys_.size() * sizeof(std::uint64_t)) + (values_.size() * sizeof(ArenaIndex));
+  }
+
+  void clear() noexcept {
+    keys_.assign(keys_.size(), 0U);
+    values_.assign(values_.size(), INVALID_INDEX);
+    size_ = 0;
+  }
+
+  // Total probes to locate every live key, divided by the number of keys. Used by
+  // the benchmark report rather than by the book, so that the published numbers
+  // come with the load factor they were measured at.
+  [[nodiscard]] double mean_probe_count() const noexcept {
+    if (size_ == 0) {
+      return 0.0;
+    }
+
+    std::uint64_t probes = 0;
+    for (std::size_t slot = 0; slot < keys_.size(); ++slot) {
+      if (keys_[slot] == 0U) {
+        continue;
+      }
+      const std::size_t ideal = slot_for(OrderId{keys_[slot]});
+      probes += static_cast<std::uint64_t>((slot - ideal) & mask_) + 1U;
+    }
+    return static_cast<double>(probes) / static_cast<double>(size_);
+  }
+
+ private:
+  // Fibonacci hashing: one multiply by the 64-bit golden ratio, then take the
+  // high bits of the product. Identity-masking was the alternative and it is
+  // tempting, because ITCH order reference numbers arrive nearly sequential and
+  // identity-masking would place them with no collisions at all. It fails when
+  // the venue's numbering has a stride sharing a factor with the capacity, which
+  // is a property of the data feed rather than of this code, and the failure mode
+  // is silent clustering. The multiply costs three cycles and removes the
+  // dependency on someone else's numbering scheme.
+  [[nodiscard]] std::size_t slot_for(OrderId id) const noexcept {
+    static constexpr std::uint64_t GOLDEN_RATIO_64 = 0x9E3779B97F4A7C15ULL;
+    return static_cast<std::size_t>((id.raw() * GOLDEN_RATIO_64) >> shift_);
+  }
+
+  std::vector<std::uint64_t> keys_;
+  std::vector<ArenaIndex> values_;
+  std::size_t mask_ = 0;
+  unsigned shift_ = 0;
+  std::uint32_t size_ = 0;
+};
+
+}  // namespace ob
