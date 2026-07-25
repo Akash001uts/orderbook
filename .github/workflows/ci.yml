@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+  schedule:
+    # 04:00 UTC daily. The only job that behaves differently on a schedule is the
+    # differential test, which runs its full command budget here.
+    - cron: "0 4 * * *"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -13,6 +17,20 @@ concurrency:
 
 env:
   CMAKE_COLOR_DIAGNOSTICS: "ON"
+
+  # Randomised command budget for the differential test against the reference
+  # book. Ten million commands per push would add minutes to every single commit
+  # for no extra information: the bugs a randomised sequence finds, it finds early,
+  # and the long runs exist to explore rarer state rather than to gate a push. So
+  # a push gets a million and the nightly schedule gets the full ten million. A
+  # manual dispatch also gets the full budget, so the long run is available on
+  # demand without waiting for the schedule.
+  #
+  # Any failing sequence is shrunk to a minimal reproducer and committed to
+  # test/regressions/, which is what makes the reduced push budget safe: once a
+  # bug has been found at any budget, it is pinned by a deterministic test that
+  # runs on every push regardless of this value.
+  OB_DIFF_COMMANDS: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '10000000' || '1000000' }}
 
 jobs:
   # Both compilers, every non sanitizer preset. -Werror is on, so a warning from
