@@ -27,7 +27,7 @@ jobs:
         compiler: [gcc, clang]
         preset: [debug, release, relwithdebinfo]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install toolchain
         run: |
@@ -70,7 +70,7 @@ jobs:
       matrix:
         preset: [asan, ubsan, tsan]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install toolchain
         run: |
@@ -97,7 +97,7 @@ jobs:
     name: clang-format
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install clang-format
         run: |
@@ -114,7 +114,7 @@ jobs:
     name: clang-tidy
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install toolchain
         run: |
@@ -144,7 +144,7 @@ jobs:
     name: style markers
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Reject em dashes
         run: |
