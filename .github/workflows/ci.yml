@@ -1,0 +1,161 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CMAKE_COLOR_DIAGNOSTICS: "ON"
+
+jobs:
+  # Both compilers, every non sanitizer preset. -Werror is on, so a warning from
+  # any target under include/, src/, itch/, strategy/, bench/, test/, or tools/
+  # fails the job.
+  build:
+    name: build ${{ matrix.compiler }} ${{ matrix.preset }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        preset: [debug, release, relwithdebinfo]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build gcc-13 g++-13 clang-18 llvm-18
+
+      - name: Select compiler
+        run: |
+          if [ "${{ matrix.compiler }}" = "gcc" ]; then
+            echo "CC=gcc-13"  >> "$GITHUB_ENV"
+            echo "CXX=g++-13" >> "$GITHUB_ENV"
+          else
+            echo "CC=clang-18"   >> "$GITHUB_ENV"
+            echo "CXX=clang++-18" >> "$GITHUB_ENV"
+          fi
+
+      - name: Report toolchain
+        run: |
+          "$CXX" --version
+          cmake --version
+          ninja --version
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+  # Sanitizers run on clang, which has the most complete runtime coverage of the
+  # three. tsan guards the harness and strategy driver: the engine itself is
+  # single threaded by design, so a tsan report there means a harness bug.
+  sanitizers:
+    name: ${{ matrix.preset }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [asan, ubsan, tsan]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang-18 llvm-18
+
+      - name: Configure
+        env:
+          CC: clang-18
+          CXX: clang++-18
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test
+        env:
+          ASAN_OPTIONS: detect_leaks=1:detect_stack_use_after_return=1:strict_string_checks=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+          TSAN_OPTIONS: halt_on_error=1
+        run: ctest --preset ${{ matrix.preset }}
+
+  format:
+    name: clang-format
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format-18
+
+      - name: Check formatting
+        run: |
+          mapfile -t files < <(git ls-files '*.hpp' '*.cpp')
+          printf 'checking %d files\n' "${#files[@]}"
+          clang-format-18 --dry-run --Werror --style=file "${files[@]}"
+
+  tidy:
+    name: clang-tidy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang-18 clang-tidy-18
+
+      - name: Configure for compile_commands.json
+        env:
+          CC: clang-18
+          CXX: clang++-18
+        run: cmake --preset debug
+
+      # clang-tidy is pointed at translation units only, never at headers
+      # directly. A header has no entry in compile_commands.json, so running it
+      # standalone loses -std=c++20 and the include paths, which produces a wall
+      # of bogus parse errors. Header diagnostics arrive through HeaderFilterRegex
+      # in .clang-tidy instead, reported against the units that include them.
+      - name: Run clang-tidy
+        run: |
+          mapfile -t units < <(git ls-files '*.cpp')
+          printf 'checking %d translation units\n' "${#units[@]}"
+          clang-tidy-18 -p out/build/debug --warnings-as-errors='*' "${units[@]}"
+
+  # Style rule I set for myself: no em dashes anywhere in the repository, and
+  # no TODO or FIXME markers surviving a phase exit.
+  style:
+    name: style markers
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reject em dashes
+        run: |
+          if git grep -n -P '\x{2014}' -- . ':!.github/workflows/ci.yml'; then
+            echo "em dash found, replace with a comma, colon, or full stop"
+            exit 1
+          fi
+
+      - name: Reject leftover markers
+        run: |
+          if git grep -nE '\b(TODO|FIXME|XXX|HACK)\b' -- . ':!.github/workflows/ci.yml'; then
+            echo "unresolved marker found"
+            exit 1
+          fi

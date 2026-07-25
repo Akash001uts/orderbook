@@ -1,0 +1,75 @@
+---
+# The hot path forbids exceptions, virtual dispatch, heap allocation, and the
+# node based standard containers. clang-tidy cannot express those rules
+# directly, so the checks below target the constructs that lead to them:
+# implicit conversions, owning raw pointers, and unchecked arithmetic.
+#
+# Three checks are disabled deliberately, each for a reason specific to this
+# codebase rather than for convenience:
+#
+# portability-avoid-pragma-once: every compiler in the support matrix implements
+# pragma once, and it cannot collide the way a hand written guard macro can.
+#
+# readability-redundant-member-init: the hot structs mix strong types, which
+# zero initialise themselves, with raw integers, which do not. Writing an
+# initialiser on every member makes "every field is initialised" verifiable by
+# reading the struct rather than by knowing which members are class types. The
+# initialiser costs nothing at runtime.
+#
+# cppcoreguidelines-pro-bounds-avoid-unchecked-container-access: the suggested
+# fix is at(), which throws. Exceptions are banned on the hot path. Every
+# indexed access in this codebase is either masked to a power of two capacity or
+# guarded by an explicit comparison against a live bound.
+Checks: >
+  bugprone-*,
+  cppcoreguidelines-*,
+  modernize-*,
+  performance-*,
+  portability-*,
+  readability-*,
+  -bugprone-easily-swappable-parameters,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-pro-bounds-constant-array-index,
+  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -cppcoreguidelines-pro-type-union-access,
+  -modernize-use-trailing-return-type,
+  -readability-identifier-length,
+  -readability-magic-numbers,
+  -readability-function-cognitive-complexity,
+  -portability-avoid-pragma-once,
+  -readability-redundant-member-init,
+  -cppcoreguidelines-pro-bounds-avoid-unchecked-container-access
+
+WarningsAsErrors: >
+  bugprone-*,
+  performance-*,
+  portability-*,
+  -bugprone-easily-swappable-parameters
+
+HeaderFilterRegex: '(include/ob|itch/include|strategy/include)/.*\.hpp$'
+
+CheckOptions:
+  - key: readability-identifier-naming.FunctionCase
+    value: lower_case
+  - key: readability-identifier-naming.VariableCase
+    value: lower_case
+  - key: readability-identifier-naming.ParameterCase
+    value: lower_case
+  - key: readability-identifier-naming.PrivateMemberCase
+    value: lower_case
+  - key: readability-identifier-naming.PrivateMemberSuffix
+    value: _
+  - key: readability-identifier-naming.ClassCase
+    value: CamelCase
+  - key: readability-identifier-naming.StructCase
+    value: CamelCase
+  - key: readability-identifier-naming.EnumCase
+    value: CamelCase
+  - key: readability-identifier-naming.EnumConstantCase
+    value: lower_case
+  - key: readability-identifier-naming.ConstexprVariableCase
+    value: UPPER_CASE
+  - key: readability-identifier-naming.GlobalConstantCase
+    value: UPPER_CASE
+  - key: readability-identifier-naming.NamespaceCase
+    value: lower_case
