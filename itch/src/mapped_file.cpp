@@ -126,27 +126,33 @@ void MappedFile::close() noexcept {
 bool MappedFile::open(const std::string& path) {
   close();
 
+  // POSIX open is variadic, because the third mode argument is only meaningful
+  // with O_CREAT. There is no non-variadic spelling of it to prefer.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
   const int descriptor = ::open(path.c_str(), O_RDONLY);
   if (descriptor < 0) {
     error_ = "open failed for " + path;
     return false;
   }
 
-  struct stat status{};
-  if (::fstat(descriptor, &status) != 0) {
+  // Written as `= {}` rather than `status{}` because clang-format 18 and 22
+  // disagree about how to format brace initialisation of an elaborated type
+  // specifier, and CI runs 18 while this project's development host runs 22.
+  struct stat file_status = {};
+  if (::fstat(descriptor, &file_status) != 0) {
     ::close(descriptor);
     error_ = "fstat failed for " + path;
     return false;
   }
 
-  if (status.st_size == 0) {
+  if (file_status.st_size == 0) {
     ::close(descriptor);
     size_ = 0;
     data_ = nullptr;
     return true;
   }
 
-  const std::size_t length = static_cast<std::size_t>(status.st_size);
+  const auto length = static_cast<std::size_t>(file_status.st_size);
 
   // MAP_PRIVATE rather than MAP_SHARED because the mapping is read only and
   // nothing here writes back. MADV_SEQUENTIAL tells the kernel the access pattern,
