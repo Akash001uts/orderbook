@@ -68,8 +68,20 @@ jobs:
           cmake --version
           ninja --version
 
+      # -march=native is off in CI, deliberately.
+      #
+      # It serves no purpose here: CI verifies correctness, and no benchmark number
+      # published anywhere comes from a hosted runner. What it does do is make the
+      # build depend on whichever CPU the runner happened to allocate. Clang 18's
+      # native detection on a recent Intel part emits an invalid AVX10.1 feature
+      # combination warning, which -Werror turns into a build failure that appears
+      # and disappears with the hardware rather than with the code.
+      #
+      # Local release builds keep it, because that is where the measurements are
+      # taken. It changes instruction selection, not semantics, so nothing about
+      # correctness goes unverified by turning it off.
       - name: Configure
-        run: cmake --preset ${{ matrix.preset }}
+        run: cmake --preset ${{ matrix.preset }} -DOB_NATIVE_ARCH=OFF
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
@@ -100,7 +112,7 @@ jobs:
         env:
           CC: gcc-13
           CXX: g++-13
-        run: cmake --preset debug
+        run: cmake --preset debug -DOB_NATIVE_ARCH=OFF
 
       - name: Build
         run: cmake --build --preset debug
@@ -250,7 +262,7 @@ jobs:
         env:
           CC: clang-18
           CXX: clang++-18
-        run: cmake --preset debug -DOB_BUILD_FUZZERS=ON
+        run: cmake --preset debug -DOB_BUILD_FUZZERS=ON -DOB_NATIVE_ARCH=OFF
 
       # clang-tidy is pointed at translation units only, never at headers
       # directly. A header has no entry in compile_commands.json, so running it
