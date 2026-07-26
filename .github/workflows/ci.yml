@@ -86,7 +86,7 @@ jobs:
   # the arena's use-after-free checks and the book's invariant assertions are live
   # while it runs.
   differential:
-    name: differential ${{ env.OB_DIFF_COMMANDS }} commands
+    name: differential
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
