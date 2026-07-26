@@ -88,6 +88,13 @@ bool ColdLevels::best(Side side, Ticks& out) const noexcept {
   return true;
 }
 
+void ColdLevels::snapshot(Side side, std::vector<std::pair<Ticks, PriceLevel>>& out) const {
+  const std::map<Ticks, PriceLevel>& levels = impl_->sides[side_index(side)];
+  for (const std::pair<const Ticks, PriceLevel>& entry : levels) {
+    out.emplace_back(entry.first, entry.second);
+  }
+}
+
 void ColdLevels::extract_range(Side side,
                                Ticks low,
                                Ticks high,

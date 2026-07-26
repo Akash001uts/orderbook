@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <cstddef>
@@ -68,6 +69,11 @@ class ColdLevels {
                      Ticks low,
                      Ticks high,
                      std::vector<std::pair<Ticks, PriceLevel>>& out);
+
+  // Appends every level, ascending by price, without removing anything. Used by
+  // the differential test's state comparison, which must see cold levels as well
+  // as banded ones.
+  void snapshot(Side side, std::vector<std::pair<Ticks, PriceLevel>>& out) const;
 
  private:
   struct Impl;
@@ -316,6 +322,137 @@ class Book {
   [[nodiscard]] ArenaIndex first_order_at(Side side, Ticks price) const noexcept {
     const PriceLevel* const level = find_level(side, price);
     return level == nullptr ? INVALID_INDEX : level->head;
+  }
+
+  // -------------------------------------------------------------------------
+  // Matching support.
+  //
+  // These take an arena index rather than an order id because the matcher has
+  // just walked a level's intrusive list to reach the order, so it already knows
+  // exactly where the order lives. Going back through the id map would repeat a
+  // lookup that has already been paid for, on the hottest loop in the engine.
+  // -------------------------------------------------------------------------
+
+  // Reduces a resting order by a partial fill. The order keeps its queue position,
+  // which is correct: a fill consumes from the front of the commitment rather
+  // than replacing it.
+  void reduce_by_index(ArenaIndex index, Quantity filled) noexcept {
+    Order& order = pool_[index];
+    assert(filled.raw() > 0U);
+    assert(filled.raw() < order.remaining && "a full consumption must use remove_by_index");
+
+    PriceLevel* const level = level_for_order(order);
+    assert(level != nullptr);
+
+    level->aggregate_qty -= filled;
+    order.remaining -= static_cast<std::uint32_t>(filled.raw());
+  }
+
+  // Removes a fully consumed resting order from the book.
+  void remove_by_index(ArenaIndex index) noexcept {
+    const OrderId id = pool_[index].id;
+
+    remove_from_level(index);
+
+    const bool erased = id_map_.erase(id);
+    static_cast<void>(erased);
+    assert(erased);
+
+    pool_.deallocate(index);
+  }
+
+  // Next occupied level strictly beyond `from`, moving away from the best price on
+  // that side: downward for bids, upward for asks.
+  //
+  // This is the one matching related query that scans rather than indexing, and it
+  // exists for the fill-or-kill liquidity check, which must total the available
+  // size without mutating anything. Ordinary matching never needs it: consuming a
+  // level clears its occupancy bit, so the next best price is another constant
+  // time bitmap query rather than a search.
+  [[nodiscard]] std::optional<Ticks> next_level_away(Side side, Ticks from) const noexcept {
+    if (!in_band(from)) {
+      return std::nullopt;
+    }
+
+    const Bitmap& bitmap = occupied_[side_index(side)];
+    const std::size_t slot = slot_of(from);
+
+    if (side == Side::buy) {
+      if (slot == 0) {
+        return std::nullopt;
+      }
+      const std::size_t found = bitmap.prev_set(slot - 1U);
+      return found == Bitmap::NONE ? std::nullopt : std::optional<Ticks>{price_of_slot(found)};
+    }
+
+    if (slot + 1U >= BandLevels) {
+      return std::nullopt;
+    }
+    const std::size_t found = bitmap.next_set(slot + 1U);
+    return found == Bitmap::NONE ? std::nullopt : std::optional<Ticks>{price_of_slot(found)};
+  }
+
+  // RAII marker for a level walk.
+  //
+  // A rebase must never happen in the middle of a match. That
+  // is currently true by construction, because the engine rests an unfilled
+  // remainder only after the match loop has finished, but "true by construction"
+  // is a property of today's call graph rather than a property anyone can rely on.
+  // While one of these exists, rebase_to asserts, which turns the requirement into
+  // something a debug build checks.
+  class LevelWalk {
+   public:
+    explicit LevelWalk(Book& book) noexcept : book_(&book) {
+      assert(!book_->walking_ && "level walks do not nest");
+      book_->walking_ = true;
+    }
+
+    ~LevelWalk() noexcept { book_->walking_ = false; }
+
+    LevelWalk(const LevelWalk&) = delete;
+    LevelWalk& operator=(const LevelWalk&) = delete;
+    LevelWalk(LevelWalk&&) = delete;
+    LevelWalk& operator=(LevelWalk&&) = delete;
+
+   private:
+    Book* book_;
+  };
+
+  // Every level on a side, ascending by price, band and cold storage merged.
+  // Not a hot path operation: it is for state comparison and depth snapshots.
+  struct LevelSnapshot {
+    Ticks price{};
+    Quantity aggregate_qty{};
+    std::uint32_t order_count = 0;
+  };
+
+  void snapshot_levels(Side side, std::vector<LevelSnapshot>& out) const {
+    out.clear();
+
+    const Bitmap& bitmap = occupied_[side_index(side)];
+    for (std::size_t slot = bitmap.next_set(0); slot != Bitmap::NONE;) {
+      const PriceLevel& level = levels_[side_index(side)][slot];
+      out.push_back(LevelSnapshot{price_of_slot(slot), level.aggregate_qty, level.order_count});
+      if (slot + 1U >= BandLevels) {
+        break;
+      }
+      slot = bitmap.next_set(slot + 1U);
+    }
+
+    if (cold_levels_[side_index(side)] == 0U) {
+      return;
+    }
+
+    std::vector<std::pair<Ticks, PriceLevel>> cold;
+    cold_.snapshot(side, cold);
+    for (const std::pair<Ticks, PriceLevel>& entry : cold) {
+      out.push_back(
+          LevelSnapshot{entry.first, entry.second.aggregate_qty, entry.second.order_count});
+    }
+
+    std::sort(out.begin(), out.end(), [](const LevelSnapshot& lhs, const LevelSnapshot& rhs) {
+      return lhs.price < rhs.price;
+    });
   }
 
   [[nodiscard]] const OrderPool& pool() const noexcept { return pool_; }
@@ -585,6 +722,7 @@ class Book {
   void rebase_to(Ticks new_base) noexcept {
     const std::int64_t shift = static_cast<std::int64_t>(new_base.raw()) - band_base_.raw();
     assert(shift != 0);
+    assert(!walking_ && "a rebase must never happen in the middle of a level walk");
 
     if (!rebase_is_feasible(shift, new_base)) {
       ++rebase_skipped_;
@@ -763,6 +901,7 @@ class Book {
   std::vector<std::pair<Ticks, PriceLevel>> cold_scratch_;
 
   bool cold_pending_ = false;
+  bool walking_ = false;
   std::uint64_t rebase_count_ = 0;
   std::uint64_t rebase_skipped_ = 0;
   std::uint64_t cold_operations_ = 0;

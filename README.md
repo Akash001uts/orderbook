@@ -13,15 +13,14 @@ rather than a smoke test.
 
 ## Status
 
-Phase 1 of 6 complete. The book, the arena, the id map, the occupancy bitmaps, and
-band rebasing are built and tested, green on GCC and Clang across debug, release,
-and all three sanitizers.
+Phase 2 of 6 complete. The book and the matching engine are built and tested,
+green on GCC and Clang across debug, release, and all three sanitizers.
 
 | Phase | Scope | State |
 | --- | --- | --- |
 | 0 | Scaffold, strong types, event model, presets, CI | complete |
 | 1 | Flat direct-indexed book, order arena, open-addressing id map, bitmap best price | complete |
-| 2 | Matching engine, order types, differential test against a `std::map` oracle | not started |
+| 2 | Matching engine, order types, differential test against a `std::map` oracle | complete |
 | 3 | ITCH 5.0 zero-copy parser, replay driver, synthetic file generator | not started |
 | 4 | Microbenchmarks, HdrHistogram latency harness, `std::map` baseline comparison | not started |
 | 5 | Market maker, queue position estimator, P&L attribution, markouts | not started |
@@ -30,6 +29,27 @@ and all three sanitizers.
 A first look at the numbers is in [BENCHMARKS.md](BENCHMARKS.md), published with
 the reasons it is not yet trustworthy. The disciplined harness lands in Phase 4.
 Nothing is claimed here that has not been measured.
+
+### Correctness
+
+Every randomised command is fed to both the real engine and a deliberately naive
+`std::map` reference book, and full state equivalence is asserted after every
+single command: best bid, best ask, per level aggregate quantity, per level order
+count, the exact ordered sequence of order ids at every occupied level, and the
+emitted event stream. A mismatch shrinks itself to a minimal reproducer, which is
+committed and replayed on every push from then on.
+
+The test itself has been validated by mutation rather than assumed to work. Three
+deliberate bugs were injected and each was caught by a different one of its checks:
+
+| Injected bug | Caught by | At command |
+| --- | --- | --- |
+| Crossing predicate `<=` changed to `<` | event stream | 3 |
+| Partial fill skips the level aggregate | aggregate quantity | 9 |
+| Quantity reduction requeues instead of holding its place | queue order | 399 |
+
+One million commands run on every push, ten million nightly, plus a coverage
+guided libFuzzer target sharing the same comparison code.
 
 ### Measured so far
 

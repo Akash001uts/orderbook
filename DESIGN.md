@@ -368,6 +368,105 @@ it is a seven times slowdown on every operation. The default is sized to a busy
 single symbol rather than to the largest book imaginable. The curve is published in
 BENCHMARKS.md.
 
+## Differential testing, and why it is the strongest evidence here
+
+**Decision.** Every randomised command goes to both the real engine and a
+deliberately naive `std::map` plus `std::list` reference book, and full state
+equivalence is asserted after every single command: best bid, best ask, per level
+aggregate quantity, per level order count, the exact ordered sequence of order ids
+at every occupied level, and the emitted event stream.
+
+**Why after every command rather than at the end.** A comparison at the end tells
+you something diverged somewhere in a million commands, which is nearly useless
+for debugging. A comparison after each one names the exact command, with a book
+small enough to read.
+
+**Why the queue order check matters most.** Aggregates can agree while queue order
+is wrong. Queue order is what price time priority actually promises, so comparing
+the id sequence at every level is the check that tests the promise rather than a
+proxy for it. It is also the check that caught the requeue mutation below.
+
+**The known limitation, stated rather than glossed.** Both implementations emit
+the same event shapes, because the event protocol is a design decision rather than
+a derived fact. A misconception about what an event should contain would be shared
+by both and the comparison would not see it. That is why `test/test_engine.cpp`
+exists: those tests are written from the specification text, not from either
+implementation, and they cover the semantics the differential test cannot
+independently confirm.
+
+### Validating the test by mutation
+
+A differential test that has never been observed to fail is a differential test
+nobody should trust. Three bugs were deliberately injected and each was caught by
+a different one of the comparison's checks:
+
+| Injected bug | Caught by | At command |
+| --- | --- | --- |
+| Crossing predicate changed from `<=` to `<` | event stream | 3 |
+| Partial fill skips the level aggregate update | aggregate quantity | 9 |
+| A quantity reduction requeues instead of holding its place | queue order | 399 |
+
+Each check earns its place, which is the point of running the exercise rather than
+assuming it.
+
+### Shrinking and regressions
+
+On mismatch the failing sequence is reduced by repeated delta debugging passes:
+drop a contiguous chunk, keep the drop if the failure survives, halve the chunk
+when a pass stops making progress. Commands are not independent, since a cancel
+refers to an earlier add, so many candidate drops change the failure rather than
+preserving it and are rejected by re-running. The result is written to
+`test/regressions/` in a plain text format and replayed on every subsequent run.
+
+That is what makes the reduced push budget safe. A bug found once at any budget is
+pinned by a deterministic test from then on, so the nightly ten million command
+run explores rarer state rather than standing between a regression and `main`.
+
+## Self trade prevention as a template parameter
+
+**Decision.** The policy is a template parameter, and two policies exist:
+`CancelNewest`, the venue default, and `CancelOldest`.
+
+**Why a template rather than a runtime flag.** The policy is consulted on every
+fill. A runtime branch there would be an unpredictable test in the hottest loop
+the engine has. As a template parameter it is a compile time constant, so the
+check folds away entirely for the overwhelmingly common case where the two
+participants differ.
+
+**Why two policies rather than one.** A template parameter with a single
+instantiation is not extensibility, it is the appearance of it. The second
+implementation is what proves the seam is real and that the engine handles both
+outcomes, and both are covered by the differential test.
+
+**Not implemented, and why.** Cancel-both removes both sides, which is simple but
+punishes a resting order that did nothing wrong. Decrement-and-cancel reduces both
+by the overlap, which is what CME uses and which needs the aggressor's original
+size threaded through the match loop. Neither demonstrates a mechanism this pair
+does not already demonstrate.
+
+## Fill-or-kill as a precondition, not an optimisation
+
+Fill-or-kill totals the reachable liquidity before touching any state, and rejects
+without mutating if it falls short. This is the one order type where a partial
+mutation would be observably wrong.
+
+The subtlety is that the total must exclude size the aggressor cannot legally
+trade against. Orders that self trade prevention would block are skipped, and
+under cancel-newest the walk stops entirely at the first such order, because the
+aggressor would stop dead there too. Counting unreachable size would let a
+fill-or-kill pass its check and then fail to fill, which is the exact outcome the
+check exists to prevent.
+
+## A market order is a limit at the extreme
+
+Rather than a separate matching path, a market order is given a synthetic limit at
+the most aggressive expressible price, so one loop serves every order type. Two
+matching paths would be two places for the semantics to drift apart.
+
+The sentinel does not leak into the event stream: a market order's events report a
+price of zero, because a market order has no price and a reader looking at that
+field would otherwise see an internal constant.
+
 ## Bugs caught by the tests, and what they teach
 
 Recorded because a test suite that never caught anything is not evidence that the
@@ -402,6 +501,16 @@ cancelled each order immediately, so the book stayed at one live order and
 everything sat in L1 while the comparison benchmark grew to fill its arena. Renamed
 to say what it does. The lesson is to check that a benchmark's result is possible
 before quoting it.
+
+**5. A test asserted a workload shape that the workload did not have.** A
+differential case meant to exercise a deep sparse book placed orders uniformly
+across a wide price span and asserted the book would end up with many occupied
+levels. It ended up with two. Uniform placement across a wide span does not build
+depth, it builds a repeatedly swept book, because a buy near the top of the span
+crosses every ask beneath it. The generator gained a passive placement mode as a
+result. The differential comparison itself never failed here, only the assertion
+about what the test was testing, which is the more useful failure: a test that
+silently exercises the wrong regime passes forever and proves nothing.
 
 ## Dependency justifications
 

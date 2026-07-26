@@ -74,8 +74,104 @@ jobs:
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
 
+      # The differential test is excluded here and given its own job. Running it
+      # six times per push, once per compiler and preset, would multiply the
+      # slowest test in the suite by six for no extra coverage: it is
+      # deterministic, so every one of those runs explores the identical sequence.
       - name: Test
-        run: ctest --preset ${{ matrix.preset }}
+        run: ctest --preset ${{ matrix.preset }} -E "^Differential"
+
+  # The differential test against the naive reference book, and the strongest
+  # correctness evidence in this repository. Debug rather than release, so that
+  # the arena's use-after-free checks and the book's invariant assertions are live
+  # while it runs.
+  differential:
+    name: differential ${{ env.OB_DIFF_COMMANDS }} commands
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build gcc-13 g++-13
+
+      - name: Configure
+        env:
+          CC: gcc-13
+          CXX: g++-13
+        run: cmake --preset debug
+
+      - name: Build
+        run: cmake --build --preset debug
+
+      - name: Run
+        run: ctest --preset debug -R "^Differential" --output-on-failure
+
+      # A mismatch shrinks itself to a minimal reproducer on disk. Uploading it
+      # means the failing sequence survives the runner, which is the difference
+      # between a reproducible bug and a note that something went wrong once.
+      - name: Upload any shrunk reproducer
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: differential-reproducer
+          path: test/regressions/
+          if-no-files-found: ignore
+
+  # Coverage guided differential fuzzing. A short run on every push, a long one on
+  # the nightly schedule, because the value of a fuzzer is roughly logarithmic in
+  # how long it runs and a push should not wait for it.
+  #
+  # This job cannot be run on the development host at all: -fsanitize=fuzzer is
+  # unsupported for the x86_64-w64-windows-gnu target, so CI is the only place the
+  # target is ever built.
+  fuzz:
+    name: fuzz
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang-18 llvm-18
+
+      - name: Configure
+        env:
+          CC: clang-18
+          CXX: clang++-18
+        run: |
+          cmake -S . -B out/build/fuzz -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DOB_BUILD_FUZZERS=ON \
+            -DOB_BUILD_TESTS=OFF \
+            -DOB_BUILD_BENCH=OFF \
+            -DOB_NATIVE_ARCH=OFF
+
+      - name: Build
+        run: cmake --build out/build/fuzz
+
+      - name: Run
+        env:
+          FUZZ_SECONDS: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '900' || '90' }}
+        run: |
+          mkdir -p out/fuzz-corpus
+          ./out/build/fuzz/ob_fuzz_differential out/fuzz-corpus \
+            -max_total_time="$FUZZ_SECONDS" \
+            -max_len=4096 \
+            -print_final_stats=1
+
+      - name: Upload any crashing input
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash
+          path: |
+            crash-*
+            timeout-*
+            oom-*
+          if-no-files-found: ignore
 
   # Sanitizers run on clang, which has the most complete runtime coverage of the
   # three. tsan guards the harness and strategy driver: the engine itself is
@@ -104,8 +200,14 @@ jobs:
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
 
+      # A reduced differential budget under the sanitizers, which run the workload
+      # several times slower. The point of running it here at all is not volume,
+      # it is that the sanitizers see memory errors the state comparison cannot:
+      # a stale arena index that happens to still hold plausible values compares
+      # equal and is caught only by asan.
       - name: Test
         env:
+          OB_DIFF_COMMANDS: 100000
           ASAN_OPTIONS: detect_leaks=1:detect_stack_use_after_return=1:strict_string_checks=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
           TSAN_OPTIONS: halt_on_error=1

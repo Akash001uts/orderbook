@@ -17,6 +17,7 @@ endif()
 option(OB_BUILD_TESTS "Build the unit, differential, and fuzz test targets" ON)
 option(OB_BUILD_BENCH "Build the microbenchmark and latency harness targets" ON)
 option(OB_BUILD_TOOLS "Build the synthetic ITCH generator" ON)
+option(OB_BUILD_FUZZERS "Build the libFuzzer differential target, requires Clang" OFF)
 option(OB_NATIVE_ARCH "Compile with -march=native" ON)
 option(OB_WERROR "Treat warnings as errors" ON)
 
@@ -184,14 +185,48 @@ if(OB_BUILD_TESTS)
   add_executable(ob_tests
     test/alloc_counter.cpp
     test/test_types.cpp
-    test/test_book.cpp)
+    test/test_book.cpp
+    test/test_engine.cpp
+    test/test_differential.cpp)
 
   target_include_directories(ob_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test)
   target_link_libraries(ob_tests PRIVATE ob ob_flags GTest::gtest_main)
 
+  # The differential test writes shrunk reproducers into the source tree, where
+  # they are committed and replayed on every later run. It therefore needs to know
+  # where the source tree is, which a build directory cannot tell it.
+  target_compile_definitions(ob_tests PRIVATE
+    OB_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test")
+
+  # The differential test dominates the suite's runtime, so it gets a longer
+  # timeout and its own label. The nightly ten million command run needs it.
   gtest_discover_tests(ob_tests
     DISCOVERY_MODE PRE_TEST
-    PROPERTIES LABELS unit)
+    TEST_SUFFIX ""
+    PROPERTIES LABELS unit TIMEOUT 1800)
+endif()
+
+# ---------------------------------------------------------------------------
+# Fuzzing.
+#
+# Off by default and Clang only, because -fsanitize=fuzzer is a Clang feature and
+# because a fuzz target is not something a plain build should have to link. It
+# shares its comparison logic with the differential test through
+# test/differential_harness.hpp, so a bug the fuzzer finds reproduces under the
+# test rather than only under the fuzzer.
+# ---------------------------------------------------------------------------
+if(OB_BUILD_FUZZERS)
+  if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "OB_BUILD_FUZZERS requires Clang, found ${CMAKE_CXX_COMPILER_ID}")
+  endif()
+
+  add_executable(ob_fuzz_differential
+    test/fuzz_differential.cpp)
+
+  target_include_directories(ob_fuzz_differential PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test)
+  target_link_libraries(ob_fuzz_differential PRIVATE ob ob_flags)
+  target_compile_options(ob_fuzz_differential PRIVATE -fsanitize=fuzzer,address)
+  target_link_options(ob_fuzz_differential PRIVATE -fsanitize=fuzzer,address)
 endif()
 
 # ---------------------------------------------------------------------------

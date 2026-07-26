@@ -68,7 +68,12 @@ becomes available. They are not a blocker.
 
 ### Phase 2, matching engine
 
-Next up, being built now. Nothing deferred yet.
+Complete. One item deliberately not built:
+
+- **Further self trade prevention policies.** `CancelNewest` and `CancelOldest`
+  are implemented and both are covered by the differential test. Cancel-both and
+  decrement-and-cancel are described in DESIGN.md with the reasoning for leaving
+  them out: neither demonstrates a mechanism the existing pair does not.
 
 ### Phase 4, benchmark harness
 
