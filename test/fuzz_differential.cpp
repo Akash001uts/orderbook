@@ -1,7 +1,7 @@
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
 #include <cstdlib>
+#include <iostream>
 #include <vector>
 
 #include "differential_harness.hpp"
@@ -96,6 +96,8 @@ constexpr unsigned PARTICIPANTS = 3;
 
 }  // namespace
 
+// The name is libFuzzer's entry point ABI, so it is not ours to style.
+// NOLINTNEXTLINE(readability-identifier-naming)
 extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size) {
   const std::size_t count = size / BYTES_PER_COMMAND;
   if (count == 0) {
@@ -110,11 +112,9 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
 
   const ob::testing::ReplayResult result = ob::testing::replay(commands);
   if (result.mismatch.has_value()) {
-    std::fprintf(stderr,
-                 "differential mismatch at command %zu: %s\n%s",
-                 result.failing_index,
-                 result.mismatch->description.c_str(),
-                 ob::testing::encode(commands).c_str());
+    std::cerr << "differential mismatch at command " << result.failing_index << ": "
+              << result.mismatch->description << '\n'
+              << ob::testing::encode(commands);
     // Abort rather than return, so libFuzzer records the input as a crash and
     // writes it out. A silent return would let the fuzzer discard the one input
     // that mattered.

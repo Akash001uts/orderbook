@@ -241,11 +241,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build clang-18 clang-tidy-18
 
+      # Fuzzers are enabled here even though this job never runs them, so that the
+      # fuzz translation unit has an entry in compile_commands.json. Without one,
+      # clang-tidy analyses it with default flags rather than the flags it is
+      # actually built with, which is the same mistake as pointing clang-tidy at a
+      # header and produces results that mean nothing.
       - name: Configure for compile_commands.json
         env:
           CC: clang-18
           CXX: clang++-18
-        run: cmake --preset debug
+        run: cmake --preset debug -DOB_BUILD_FUZZERS=ON
 
       # clang-tidy is pointed at translation units only, never at headers
       # directly. A header has no entry in compile_commands.json, so running it
