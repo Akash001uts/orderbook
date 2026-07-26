@@ -13,6 +13,24 @@ than stubbed: this document tracks what exists.
 - [PriceLevel layout and the 24 versus 32 byte question](#pricelevel-layout-and-the-24-versus-32-byte-question)
 - [Events as data, not callbacks](#events-as-data-not-callbacks)
 - [Non-atomic event ring](#non-atomic-event-ring)
+- [Open addressing over std::unordered_map](#open-addressing-over-stdunorderedmap)
+- [Hierarchical bitmaps for best price](#hierarchical-bitmaps-for-best-price)
+- [Band rebasing, and what it costs](#band-rebasing-and-what-it-costs)
+- [The overflow cold path](#the-overflow-cold-path)
+- [Arena capacity is a cache decision](#arena-capacity-is-a-cache-decision)
+- [Differential testing, and why it is the strongest evidence here](#differential-testing-and-why-it-is-the-strongest-evidence-here)
+- [Self trade prevention as a template parameter](#self-trade-prevention-as-a-template-parameter)
+- [Fill-or-kill as a precondition, not an optimisation](#fill-or-kill-as-a-precondition-not-an-optimisation)
+- [A market order is a limit at the extreme](#a-market-order-is-a-limit-at-the-extreme)
+- [ITCH decoding: byte assembly rather than struct casting](#itch-decoding-byte-assembly-rather-than-struct-casting)
+- [Two independent sources of truth about message length](#two-independent-sources-of-truth-about-message-length)
+- [Replay reconstructs; it does not re-match](#replay-reconstructs-it-does-not-re-match)
+- [Symbol filtering by locate code](#symbol-filtering-by-locate-code)
+- [Order replace loses queue priority](#order-replace-loses-queue-priority)
+- [Messages that do not touch the book](#messages-that-do-not-touch-the-book)
+- [Memory mapping rather than reading](#memory-mapping-rather-than-reading)
+- [The synthetic generator, and why it must be semantically valid](#the-synthetic-generator-and-why-it-must-be-semantically-valid)
+- [Bugs caught by the tests, and what they teach](#bugs-caught-by-the-tests-and-what-they-teach)
 - [Dependency justifications](#dependency-justifications)
 - [Warning flags on an interface target](#warning-flags-on-an-interface-target)
 - [Out of scope, and why](#out-of-scope-and-why)
@@ -457,6 +475,19 @@ aggressor would stop dead there too. Counting unreachable size would let a
 fill-or-kill pass its check and then fail to fill, which is the exact outcome the
 check exists to prevent.
 
+**The mirror image is just as wrong, and it is the bug this section originally
+missed.** Counting *less* than the matcher can reach makes the check reject an
+order the matcher would have filled in full. That is conservative in direction, so
+it is easy to overlook, but it is still the precheck and the matcher disagreeing
+about the same book. The walk must therefore see exactly what the matcher sees,
+which means both must traverse the union of the band and cold storage. See bug 8 in
+the log below: the two used to disagree, and every differential configuration in
+the suite was blind to it.
+
+The general rule this leaves behind: any precheck that predicts what a mutating
+path will do has to enumerate over precisely the same structures, or it is
+predicting a different book.
+
 ## A market order is a limit at the extreme
 
 Rather than a separate matching path, a market order is given a synthetic limit at
@@ -633,6 +664,16 @@ everything sat in L1 while the comparison benchmark grew to fill its arena. Rena
 to say what it does. The lesson is to check that a benchmark's result is possible
 before quoting it.
 
+**5. A test asserted a workload shape that the workload did not have.** A
+differential case meant to exercise a deep sparse book placed orders uniformly
+across a wide price span and asserted the book would end up with many occupied
+levels. It ended up with two. Uniform placement across a wide span does not build
+depth, it builds a repeatedly swept book, because a buy near the top of the span
+crosses every ask beneath it. The generator gained a passive placement mode as a
+result. The differential comparison itself never failed here, only the assertion
+about what the test was testing, which is the more useful failure: a test that
+silently exercises the wrong regime passes forever and proves nothing.
+
 **6. The synthetic generator produced a completely static market.** The mid's
 random walk truncated each step to a whole number of ticks, so any volatility below
 one tick rounded every single step to zero and the price never moved. The default
@@ -654,15 +695,20 @@ rather than by any test, which is the uncomfortable part: a wrong distribution i
 invisible to every assertion that only checks validity. Replaced with explicit
 cumulative selection.
 
-**5. A test asserted a workload shape that the workload did not have.** A
-differential case meant to exercise a deep sparse book placed orders uniformly
-across a wide price span and asserted the book would end up with many occupied
-levels. It ended up with two. Uniform placement across a wide span does not build
-depth, it builds a repeatedly swept book, because a buy near the top of the span
-crosses every ask beneath it. The generator gained a passive placement mode as a
-result. The differential comparison itself never failed here, only the assertion
-about what the test was testing, which is the more useful failure: a test that
-silently exercises the wrong regime passes forever and proves nothing.
+**8. Fill-or-kill undercounted liquidity resting in cold storage.** The liquidity
+precheck walked levels with `next_level_away`, which consulted only the band bitmap
+and returned nothing the moment it left the band. The match loop calls `best()`
+repeatedly, and `best()` does see cold levels, so the matcher would fill straight
+through liquidity the precheck could not count. A fill-or-kill the matcher would have
+filled in full was rejected as insufficient. Found by code review, not by the
+test suite, and that is the interesting part: every differential configuration used a
+price span of 2 to 900 ticks inside a 4096 level band, so no command sequence ever
+combined fill-or-kill with cold levels. The three existing differential tests all pass
+against the buggy code. `next_level_away` now walks the union of the band and cold
+storage in price order, and a configuration whose price span exceeds the band was
+added, which fails against the old code at command 154. The lesson is that a
+randomised test only covers the regimes its generator can reach, and a blind spot in
+the generator is invisible from inside the suite.
 
 ## Dependency justifications
 

@@ -196,8 +196,12 @@ class ReferenceBook {
       emit_reject(out, command, RejectReason::duplicate_order);
       return;
     }
-    if (command.quantity.raw() == 0U || command.quantity.raw() > MAX_ORDER_SHARES) {
+    if (command.quantity.raw() == 0U) {
       emit_reject(out, command, RejectReason::zero_quantity);
+      return;
+    }
+    if (command.quantity.raw() > MAX_ORDER_SHARES) {
+      emit_reject(out, command, RejectReason::quantity_too_large);
       return;
     }
 
@@ -448,8 +452,12 @@ class ReferenceBook {
       emit_reject(out, command, RejectReason::unknown_order);
       return;
     }
-    if (command.quantity.raw() == 0U || command.quantity.raw() > MAX_ORDER_SHARES) {
+    if (command.quantity.raw() == 0U) {
       emit_reject(out, command, RejectReason::zero_quantity);
+      return;
+    }
+    if (command.quantity.raw() > MAX_ORDER_SHARES) {
+      emit_reject(out, command, RejectReason::quantity_too_large);
       return;
     }
 

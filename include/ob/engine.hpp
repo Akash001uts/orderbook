@@ -174,8 +174,12 @@ class Engine {
       emit_reject(sink, command, RejectReason::duplicate_order);
       return;
     }
-    if (command.quantity.raw() == 0U || command.quantity.raw() > MAX_ORDER_SHARES) {
+    if (command.quantity.raw() == 0U) {
       emit_reject(sink, command, RejectReason::zero_quantity);
+      return;
+    }
+    if (command.quantity.raw() > MAX_ORDER_SHARES) {
+      emit_reject(sink, command, RejectReason::quantity_too_large);
       return;
     }
 
@@ -285,8 +289,9 @@ class Engine {
       case AddStatus::duplicate_id:
         return RejectReason::duplicate_order;
       case AddStatus::zero_quantity:
-      case AddStatus::quantity_too_large:
         return RejectReason::zero_quantity;
+      case AddStatus::quantity_too_large:
+        return RejectReason::quantity_too_large;
       case AddStatus::arena_exhausted:
       case AddStatus::map_exhausted:
         return RejectReason::arena_exhausted;
@@ -474,8 +479,12 @@ class Engine {
       return;
     }
 
-    if (command.quantity.raw() == 0U || command.quantity.raw() > MAX_ORDER_SHARES) {
+    if (command.quantity.raw() == 0U) {
       emit_reject(sink, command, RejectReason::zero_quantity);
+      return;
+    }
+    if (command.quantity.raw() > MAX_ORDER_SHARES) {
+      emit_reject(sink, command, RejectReason::quantity_too_large);
       return;
     }
 
@@ -501,8 +510,10 @@ class Engine {
         emit_reject(sink, command, RejectReason::unknown_order);
         return;
       case ModifyStatus::zero_quantity:
-      case ModifyStatus::quantity_too_large:
         emit_reject(sink, command, RejectReason::zero_quantity);
+        return;
+      case ModifyStatus::quantity_too_large:
+        emit_reject(sink, command, RejectReason::quantity_too_large);
         return;
     }
   }

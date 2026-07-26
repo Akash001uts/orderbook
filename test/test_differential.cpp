@@ -379,6 +379,76 @@ TEST(Differential, SurvivesAWideSparseBook) {
       << "the wide span should have produced a genuinely sparse book";
 }
 
+// Prices deliberately spread wider than the band, so a large fraction of the book
+// lives in cold storage at any moment.
+//
+// This configuration exists because a code review found a bug the entire
+// existing differential suite was blind to. Every other configuration uses a price
+// span of 2 to 900 ticks inside a 4096 level band, so no command sequence ever
+// combined fill-or-kill with cold levels. The liquidity precheck walked only the
+// band bitmap while the matcher walked cold levels too, so a fill-or-kill the
+// matcher would have filled in full was rejected as insufficient. The reference book
+// has no band concept and counts everything, so this test fails against the old
+// engine and passes against the fixed one.
+//
+// The cold cap is raised well above the number of distinct prices this span can
+// produce. That is not papering over anything: the reference book is unbounded by
+// design, so a band_overflow rejection would be a capacity divergence rather than a
+// semantic one, and it would mask the behaviour under test.
+TEST(Differential, MatchesWhenLiquiditySpansTheBandEdgeIntoColdStorage) {
+  GeneratorConfig config;
+  config.seed = 606060;
+  config.price_span = 3000;  // band covers 4096 ticks, so this overflows it
+  config.participants = 3;
+  CommandGenerator generator(config);
+
+  DiffEngine::Config engine_config;
+  engine_config.price = diff_price_config();
+  engine_config.arena_capacity = 1U << 15;
+  engine_config.max_cold_levels_per_side = 8192;
+  engine_config.initial_center = Ticks{0};
+
+  DiffEngine engine(engine_config);
+  DiffReference reference(diff_price_config());
+  DiffRing ring;
+
+  std::vector<std::uint64_t> live_ids;
+  std::vector<ExecutionEvent> fast_events;
+  std::vector<ExecutionEvent> slow_events;
+
+  for (std::size_t i = 0; i < 60000; ++i) {
+    const Command command = generator.next(live_ids);
+
+    ring.clear();
+    fast_events.clear();
+    slow_events.clear();
+
+    engine.submit(command, ring);
+    reference.submit(command, slow_events);
+
+    ExecutionEvent event;
+    while (ring.pop(event)) {
+      fast_events.push_back(event);
+    }
+
+    ASSERT_FALSE(ring.overflowed()) << "command " << i;
+    if (const std::optional<Mismatch> events = compare_events(fast_events, slow_events)) {
+      FAIL() << "command " << i << ": " << events->description;
+    }
+    if (const std::optional<Mismatch> state = compare_state(engine, reference)) {
+      FAIL() << "command " << i << ": " << state->description;
+    }
+
+    collect_live_ids(reference, live_ids);
+  }
+
+  // Without these the test could pass by never entering the regime it exists to
+  // cover, which is the failure mode that let the original bug survive.
+  EXPECT_GT(engine.book().cold_level_count(), 0U)
+      << "no cold levels, so this test did not exercise the path it was written for";
+  EXPECT_GT(engine.book().rebase_count(), 0U) << "the wide span should have forced rebasing";
+}
+
 // The cancel-oldest policy needs exercising too, or the template parameter is
 // only ever proven for its default instantiation.
 TEST(Differential, MatchesUnderCancelOldestPolicy) {

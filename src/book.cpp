@@ -76,6 +76,28 @@ std::size_t ColdLevels::count_in_range(Side side, Ticks low, Ticks high) const n
   return count;
 }
 
+bool ColdLevels::next_away(Side side, Ticks from, Ticks& out) const noexcept {
+  const std::map<Ticks, PriceLevel>& levels = impl_->sides[side_index(side)];
+
+  if (side == Side::buy) {
+    // Highest key strictly below `from`. lower_bound lands on the first key at or
+    // above it, so the one before that is the answer.
+    const auto at_or_above = levels.lower_bound(from);
+    if (at_or_above == levels.begin()) {
+      return false;
+    }
+    out = std::prev(at_or_above)->first;
+    return true;
+  }
+
+  const auto above = levels.upper_bound(from);
+  if (above == levels.end()) {
+    return false;
+  }
+  out = above->first;
+  return true;
+}
+
 bool ColdLevels::best(Side side, Ticks& out) const noexcept {
   const std::map<Ticks, PriceLevel>& levels = impl_->sides[side_index(side)];
   if (levels.empty()) {

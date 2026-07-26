@@ -58,6 +58,12 @@ class ColdLevels {
   // into cold.
   [[nodiscard]] std::size_t count_in_range(Side side, Ticks low, Ticks high) const noexcept;
 
+  // Nearest level strictly worse than `from`: the highest price below it on the buy
+  // side, the lowest price above it on the sell side. False when there is none.
+  // Used by the fill-or-kill liquidity walk, which has to see cold levels because
+  // the matcher does.
+  [[nodiscard]] bool next_away(Side side, Ticks from, Ticks& out) const noexcept;
+
   // Highest price for the buy side, lowest for the sell side, matching the sense
   // of "best" on each. False when that side holds nothing.
   [[nodiscard]] bool best(Side side, Ticks& out) const noexcept;
@@ -230,7 +236,9 @@ class Book {
     link_at_tail(*level, index);
     ++cold_operations_;
     refresh_cold_counts();
-    cold_pending_ = true;
+
+    // A price landed outside the band, which is the clearest signal there is that
+    // the band is in the wrong place, so recentring is attempted immediately.
     rebase_now();
     return AddStatus::ok;
   }
@@ -369,27 +377,27 @@ class Book {
   // size without mutating anything. Ordinary matching never needs it: consuming a
   // level clears its occupancy bit, so the next best price is another constant
   // time bitmap query rather than a search.
+  //
+  // It walks the union of the band and cold storage, in price order. An earlier
+  // version consulted only the band bitmap and returned nothing the moment `from`
+  // fell outside the band, which made it disagree with the matcher: match() calls
+  // best() repeatedly, best() sees cold levels, so the matcher fills straight
+  // through liquidity the liquidity check could not see. A fill-or-kill the matcher
+  // would have filled in full was rejected as insufficient. Whichever candidate is
+  // nearer to the market is the answer, and that is exactly the sense in which
+  // better_of already compares two prices on a side.
   [[nodiscard]] std::optional<Ticks> next_level_away(Side side, Ticks from) const noexcept {
-    if (!in_band(from)) {
-      return std::nullopt;
+    const std::optional<Ticks> banded = next_band_level_away(side, from);
+
+    if (cold_levels_[side_index(side)] == 0U) {
+      return banded;
     }
 
-    const Bitmap& bitmap = occupied_[side_index(side)];
-    const std::size_t slot = slot_of(from);
-
-    if (side == Side::buy) {
-      if (slot == 0) {
-        return std::nullopt;
-      }
-      const std::size_t found = bitmap.prev_set(slot - 1U);
-      return found == Bitmap::NONE ? std::nullopt : std::optional<Ticks>{price_of_slot(found)};
+    Ticks cold{};
+    if (!cold_.next_away(side, from, cold)) {
+      return banded;
     }
-
-    if (slot + 1U >= BandLevels) {
-      return std::nullopt;
-    }
-    const std::size_t found = bitmap.next_set(slot + 1U);
-    return found == Bitmap::NONE ? std::nullopt : std::optional<Ticks>{price_of_slot(found)};
+    return better_of(side, banded, std::optional<Ticks>{cold});
   }
 
   // RAII marker for a level walk.
@@ -613,6 +621,40 @@ class Book {
     return price_of_slot(slot);
   }
 
+  // Nearest occupied band level strictly worse than `from`.
+  //
+  // It has to cope with a `from` that lies outside the band, which the cold path
+  // makes reachable in both directions: a cold price below the band still has band
+  // levels above it, and a cold price above the band still has band levels below.
+  // The clamping is what handles those two cases, and getting it wrong would make
+  // the fill-or-kill walk skip the entire band.
+  [[nodiscard]] std::optional<Ticks> next_band_level_away(Side side, Ticks from) const noexcept {
+    const Bitmap& bitmap = occupied_[side_index(side)];
+    const std::int64_t offset = static_cast<std::int64_t>(from.raw()) - band_base_.raw();
+
+    if (side == Side::buy) {
+      // Highest occupied slot strictly below `from`. At or below the band base
+      // there is nothing lower to find.
+      if (offset <= 0) {
+        return std::nullopt;
+      }
+      const std::size_t highest = std::cmp_less(offset - 1, BandLevels)
+                                      ? static_cast<std::size_t>(offset - 1)
+                                      : BandLevels - 1U;
+      const std::size_t found = bitmap.prev_set(highest);
+      return found == Bitmap::NONE ? std::nullopt : std::optional<Ticks>{price_of_slot(found)};
+    }
+
+    // Lowest occupied slot strictly above `from`. At or above the band top there is
+    // nothing higher to find.
+    if (std::cmp_greater_equal(offset + 1, BandLevels)) {
+      return std::nullopt;
+    }
+    const std::size_t lowest = offset + 1 <= 0 ? 0U : static_cast<std::size_t>(offset + 1);
+    const std::size_t found = bitmap.next_set(lowest);
+    return found == Bitmap::NONE ? std::nullopt : std::optional<Ticks>{price_of_slot(found)};
+  }
+
   [[nodiscard]] std::optional<Ticks> cold_best(Side side) const noexcept {
     Ticks out{};
     if (cold_.best(side, out)) {
@@ -669,18 +711,13 @@ class Book {
   void maybe_rebase(std::size_t touched_slot) noexcept {
     const bool near_edge =
         touched_slot < REBASE_MARGIN || touched_slot >= BandLevels - REBASE_MARGIN;
-    if (!near_edge && !cold_pending_) {
+    if (!near_edge) {
       return;
     }
     rebase_now();
   }
 
   void rebase_now() noexcept {
-    // Cleared unconditionally, even when the rebase turns out to be futile. A
-    // cold level too far away to ever fit would otherwise make every subsequent
-    // add retry the same recentring calculation forever.
-    cold_pending_ = false;
-
     const std::optional<Ticks> centre = market_centre();
     if (!centre.has_value()) {
       return;
@@ -736,12 +773,6 @@ class Book {
     band_base_ = new_base;
     ++rebase_count_;
     refresh_cold_counts();
-
-    // Deliberately not re-armed from whatever remains in cold storage. A level too
-    // far away to ever fit inside the band would otherwise make every following
-    // add recompute the same futile recentring. Anything still cold comes back on
-    // the next rebase, which the edge margin will trigger when the market returns.
-    cold_pending_ = false;
   }
 
   [[nodiscard]] bool rebase_is_feasible(std::int64_t shift, Ticks new_base) const noexcept {
@@ -900,7 +931,6 @@ class Book {
   std::vector<std::uint32_t> rebase_scratch_;
   std::vector<std::pair<Ticks, PriceLevel>> cold_scratch_;
 
-  bool cold_pending_ = false;
   bool walking_ = false;
   std::uint64_t rebase_count_ = 0;
   std::uint64_t rebase_skipped_ = 0;

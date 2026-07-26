@@ -91,9 +91,13 @@ using OrderId = StrongInt<std::uint64_t, OrderIdTag>;
 // engine never reads a clock: every timestamp arrives on an input event.
 using Timestamp = StrongInt<std::uint64_t, TimestampTag>;
 
-// Monotonic arrival counter assigned by the engine. Time priority within a
-// price level is resolved by this, not by Timestamp, because venue timestamps
-// tie at nanosecond granularity under burst load.
+// Monotonic counter the engine stamps on each emitted event, so that an event
+// stream has a total order independent of any clock.
+//
+// It does not establish queue priority. Time priority within a price level is
+// structural: it is the insertion order of the intrusive list, so an Order carries
+// no sequence field at all. Nothing compares Sequence values to decide who trades
+// first.
 using Sequence = StrongInt<std::uint64_t, SequenceTag>;
 
 enum class Side : std::uint8_t { buy = 0, sell = 1 };

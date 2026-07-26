@@ -52,6 +52,7 @@ enum class RejectReason : std::uint8_t {
   unknown_order,           // cancel or modify naming an id the book does not hold
   duplicate_order,         // add reusing a live id
   zero_quantity,           // add or modify with no shares
+  quantity_too_large,      // more shares than the ITCH 5.0 field width expresses
   off_tick,                // price is not an exact multiple of tick_size
   band_overflow,           // price outside the band and the cold path is disabled
   arena_exhausted,         // no free arena slot, the book is at capacity
