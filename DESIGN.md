@@ -467,6 +467,137 @@ The sentinel does not leak into the event stream: a market order's events report
 price of zero, because a market order has no price and a reader looking at that
 field would otherwise see an internal constant.
 
+## ITCH decoding: byte assembly rather than struct casting
+
+**Decision.** Every field is assembled from individual bytes by explicit big endian
+load helpers. No pointer into the buffer is ever cast to a struct or to a wider
+integer type.
+
+**Alternative considered.** Define a packed struct per message type and
+`reinterpret_cast` the buffer to it, then byte swap the fields.
+
+**Reasoning.** The shortcut is undefined behaviour twice over. It violates strict
+aliasing, and ITCH fields are unaligned: an eight byte order reference number sits
+at offset 11 of every order message. On x86 the unaligned load happens to work,
+which is precisely what makes it dangerous, because the code looks correct until it
+is compiled for a different target or run under UndefinedBehaviorSanitizer. This
+was the parser rule I was most careful about.
+
+The byte assembly costs nothing. Both GCC and Clang recognise the pattern and emit
+a single load plus a `bswap` at `-O2` and above, which the measured 312 million
+messages per second on the parse-only path confirms.
+
+**The six byte timestamp** is the field that makes struct casting impossible
+anyway. There is no 48-bit integer type, so it has to be assembled into a `uint64`
+with the top two bytes left clear regardless of approach.
+
+## Two independent sources of truth about message length
+
+**Decision.** The parser carries a length table for every known type *and* reads
+the two byte length prefix that the sample files carry, then checks them against
+each other. A disagreement aborts the parse.
+
+**Reasoning.** They serve different purposes. The prefix is what lets an
+*unrecognised* type be skipped correctly, which is the property that keeps an
+unknown message from desynchronising the whole remainder of the stream. The table
+is what detects corruption and version drift, because a prefix that disagrees with
+the known length of a known type means either the bytes are damaged or this build's
+assumptions about the protocol are wrong. Continuing from a plausible looking
+offset in either case produces confident nonsense, which is worse than stopping.
+
+## Replay reconstructs; it does not re-match
+
+**Decision.** The replay driver applies ITCH messages directly to the book. It
+does not feed historical orders through the matching engine.
+
+**Reasoning, and this is the most important decision in the ITCH layer.** An
+execution message is the venue telling us a trade has already happened. The correct
+response is to reduce the resting order by the executed size. Feeding historical
+orders through the matcher instead would re-derive trades the stream has already
+reported and double count every one of them.
+
+Phase 5's strategy orders are the opposite case. Those are hypothetical, no venue
+has ever matched them, so they do go through the engine and contend for real queue
+position against this reconstructed book. The same `Book` serves both, which is what
+makes the strategy's fills interact with real queue dynamics rather than with a
+separate optimistic model.
+
+## Symbol filtering by locate code
+
+**Decision.** Filtering is on the two byte stock locate code from the message
+header, resolved by watching for the stock directory entry that names the requested
+symbol.
+
+**This is a necessity, not an optimisation.** The execution, cancel, delete and
+replace messages carry no symbol field at all. Only the locate. Any design that
+filtered by comparing symbol strings would silently drop every modification to the
+book and keep only the adds.
+
+It is also much cheaper, since it compares two bytes rather than eight, on a path
+that discards the large majority of messages in a real multi-symbol capture.
+
+## Order replace loses queue priority
+
+**Decision.** A `U` replace is implemented as a cancel of the original reference
+followed by an add of the new one, at the back of its level's queue.
+
+**Alternative considered.** Treat it as a modify, preserving queue position.
+
+**Reasoning.** The message carries a *new order reference number* precisely because
+the venue treats it as a new order. Implementing it as a modify would preserve a
+queue position that the real book gave up, and the consequence is not abstract: it
+would flatter every queue position estimate Phase 5 produces, and therefore every
+P&L number that depends on one. `ItchReplay.ReplaceLosesQueuePriority` pins it.
+
+The side is not in the replace message, so it has to be read from the order being
+replaced before that order is removed. Getting that wrong would move liquidity to
+the other side of the book, which is why there is a test for it specifically.
+
+## Messages that do not touch the book
+
+Non-cross trades (`P`), cross trades (`Q`), and broken trades (`B`) are counted and
+ignored.
+
+A `P` reports a trade against a *non-displayed* order. There is no resting order in
+the visible book to adjust, so acting on it would remove liquidity that was never
+there. Auction crosses execute outside the continuous book, and a broken trade is
+an after-the-fact correction to a print rather than a change to resting liquidity.
+
+## Memory mapping rather than reading
+
+A full trading day of TotalView-ITCH is several gigabytes. Reading it into a buffer
+costs that much resident memory plus a copy of every byte, and the copy is pure
+waste because the parser is zero copy: it hands out spans into whatever memory the
+bytes already occupy. Mapping lets the kernel page in what the parser touches and
+drop it under pressure, so replay memory stays roughly constant regardless of file
+size.
+
+Both `mmap` and the Windows `CreateFileMapping` plus `MapViewOfFile` path are
+implemented. That is not gold plating: the development host for this project is
+Windows while the benchmark methodology targets Linux, and a parser that compiled
+on only one of them would be untestable on the other.
+
+## The synthetic generator, and why it must be semantically valid
+
+**Decision.** `tools/itch_gen` writes real ITCH 5.0 binary, and the parser reads it
+through exactly the same code path as a real capture with no branch anywhere on
+where the bytes came from.
+
+**Why it exists.** Real sample files are several gigabytes behind a NASDAQ
+download. A repository whose tests only run for someone who already has one is a
+repository whose tests nobody runs, CI included.
+
+**Structural validity is not enough.** Executions, cancels, deletes and replaces
+only ever name orders that are live at that point in the stream, and an execution
+never exceeds an order's remaining size. A generator that emitted random order
+references would produce a file the parser reads happily and the replay driver
+rejects entirely, which would validate nothing. The generator therefore maintains
+its own model of the live book, and that model doubles as the expectation the
+replayed book is checked against, so validation does not depend on the parser
+agreeing with itself.
+
+The generated book is also never crossed, because a real venue's book cannot be.
+
 ## Bugs caught by the tests, and what they teach
 
 Recorded because a test suite that never caught anything is not evidence that the
@@ -501,6 +632,27 @@ cancelled each order immediately, so the book stayed at one live order and
 everything sat in L1 while the comparison benchmark grew to fill its arena. Renamed
 to say what it does. The lesson is to check that a benchmark's result is possible
 before quoting it.
+
+**6. The synthetic generator produced a completely static market.** The mid's
+random walk truncated each step to a whole number of ticks, so any volatility below
+one tick rounded every single step to zero and the price never moved. The default
+volatility was 0.35 ticks, so the default configuration generated a market that did
+not move at all. The mid is now carried as a fractional tick count and rounded only
+when a price is written, and a deliberate drift parameter was added because a pure
+random walk drifts as the square root of the message count and would need an
+impractically long stream to reach a band edge by chance. Caught by a rebasing test
+that reported zero rebases when it expected many. The lesson is that a test which
+asserts a *consequence* of the workload, rather than the workload itself, catches
+generator bugs that a structural check never would.
+
+**7. A weight-based dispatch was wrong in a way that still produced a valid file.**
+The generator's message mix selection used a lambda that decremented a running roll
+and short-circuited over pairs of weights, then re-inspected the mutated roll to
+choose within the pair. The resulting file parsed and replayed perfectly; the
+message mix was simply not the mix that was configured. Found by reading it back
+rather than by any test, which is the uncomfortable part: a wrong distribution is
+invisible to every assertion that only checks validity. Replaced with explicit
+cumulative selection.
 
 **5. A test asserted a workload shape that the workload did not have.** A
 differential case meant to exercise a deep sparse book placed orders uniformly

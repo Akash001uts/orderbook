@@ -13,15 +13,16 @@ rather than a smoke test.
 
 ## Status
 
-Phase 2 of 6 complete. The book and the matching engine are built and tested,
-green on GCC and Clang across debug, release, and all three sanitizers.
+Phase 3 of 6 complete. The book, the matching engine, and the ITCH 5.0 pipeline are
+built and tested: 90 tests green on GCC and Clang across debug, release,
+relwithdebinfo, and all three sanitizers.
 
 | Phase | Scope | State |
 | --- | --- | --- |
 | 0 | Scaffold, strong types, event model, presets, CI | complete |
 | 1 | Flat direct-indexed book, order arena, open-addressing id map, bitmap best price | complete |
 | 2 | Matching engine, order types, differential test against a `std::map` oracle | complete |
-| 3 | ITCH 5.0 zero-copy parser, replay driver, synthetic file generator | not started |
+| 3 | ITCH 5.0 zero-copy parser, replay driver, synthetic file generator | complete |
 | 4 | Microbenchmarks, HdrHistogram latency harness, `std::map` baseline comparison | not started |
 | 5 | Market maker, queue position estimator, P&L attribution, markouts | not started |
 | 6 | Documentation pass | not started |
@@ -62,6 +63,8 @@ guided libFuzzer target sharing the same comparison code.
 | Order id lookup | 2.3 ns |
 | Cancel from level head | 18.7 ns |
 | Add to an existing level | 22.8 ns |
+| ITCH parse only | 312 M msg/s, 9.7 GiB/s |
+| ITCH parse and replay | 15.7 M msg/s |
 
 Measured on Windows with no core pinning on a hybrid CPU, so treat differences
 under a factor of two as noise. The conditions are spelled out in full in
@@ -76,6 +79,13 @@ newer. Dependencies are fetched by CMake, so a clone and a configure is enough.
 cmake --preset release
 cmake --build --preset release
 ctest --preset release
+```
+
+No market data download is needed. `itch_gen` writes real ITCH 5.0 binary, and the
+parser reads it through exactly the same code path as a NASDAQ capture:
+
+```bash
+./out/build/release/itch_gen --messages 1000000 --symbol AAPL data/sample.itch
 ```
 
 Presets: `debug`, `release`, `relwithdebinfo`, `asan`, `tsan`, `ubsan`. The three

@@ -72,6 +72,41 @@ arena and reported 54 ns for an add. That number was a DRAM latency wearing an
 add's name. The default arena size was reduced to 65536 as a result, which is
 documented in DESIGN.md as a cache decision rather than a capacity one.
 
+### ITCH pipeline throughput
+
+Synthetic file, 500 000 messages, 16.5 MiB, roughly 10 percent belonging to decoy
+symbols that replay filters out. GCC 16.1.0 `-O3 -march=native`, median of 3
+repetitions. Same caveats as everything above: no core pinning, no frequency
+control.
+
+| Arm | Throughput | Per message | What it includes |
+| --- | --- | --- | --- |
+| Parse only | 312 M msg/s, 9.7 GiB/s | 3.2 ns | Framing, length cross check, and two header field decodes |
+| Parse and replay | 15.7 M msg/s, 499 MiB/s | 64 ns | The above plus the book mutation, 450 k of 500 k messages applied |
+
+The two arms are reported separately on purpose. The parse-only arm is what a
+filtered replay does to the majority of messages in a real multi-symbol capture:
+read the type and the locate, then discard. Publishing only the combined figure
+would make it impossible to tell which half a change affected.
+
+The 3.2 ns parse figure is the strongest evidence that byte-by-byte big endian
+assembly costs nothing next to a struct cast: at 3.1 GHz that is about ten cycles
+per message including the framing arithmetic and the length table lookup.
+
+Generated message mix, from `itch_gen --messages 200000`:
+
+| Type | Count | Share |
+| --- | --- | --- |
+| `A`/`F` add order | 85 886 | 42.9 % |
+| `D` delete | 42 441 | 21.2 % |
+| `E`/`C` executed | 23 253 | 11.6 % |
+| decoy symbols | 19 957 | 10.0 % |
+| `X` cancel | 12 321 | 6.2 % |
+| `U` replace | 8 920 | 4.5 % |
+| `P` trade | 3 624 | 1.8 % |
+| `Q` cross | 1 824 | 0.9 % |
+| `B` broken | 1 770 | 0.9 % |
+
 ### What is not yet explained
 
 The best bid query at 13.4 ns is slower than its instruction count justifies. It

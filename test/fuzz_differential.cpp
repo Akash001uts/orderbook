@@ -78,7 +78,7 @@ constexpr unsigned PARTICIPANTS = 3;
   command.id = ob::OrderId{1U + (static_cast<std::uint64_t>(bytes[3]) % ID_SPACE)};
 
   const auto tick =
-      static_cast<std::int32_t>(static_cast<int>(bytes[4] % (2U * PRICE_SPAN + 1U)) - PRICE_SPAN);
+      static_cast<std::int32_t>(static_cast<int>(bytes[4] % ((2U * PRICE_SPAN) + 1U)) - PRICE_SPAN);
   command.price = ob::Price{ob::testing::DIFF_BASE_PRICE +
                             (static_cast<std::int64_t>(tick) * ob::testing::DIFF_TICK_SIZE)};
 

@@ -98,6 +98,33 @@ target_sources(ob PUBLIC FILE_SET HEADERS
   FILES ${OB_PUBLIC_HEADERS})
 
 # ---------------------------------------------------------------------------
+# ITCH 5.0 parser, replay driver, and synthetic generator.
+#
+# A separate target from ob because it depends on the platform: mapped_file.cpp is
+# the only file in the project that includes windows.h or sys/mman.h, and keeping
+# that behind its own library means nothing in the core book can accidentally
+# acquire a platform dependency.
+# ---------------------------------------------------------------------------
+add_library(ob_itch STATIC
+  itch/src/parser.cpp
+  itch/src/mapped_file.cpp
+  itch/src/synthetic.cpp)
+
+target_include_directories(ob_itch PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/itch/include>)
+
+target_link_libraries(ob_itch PUBLIC ob ob_flags)
+
+target_sources(ob_itch PUBLIC FILE_SET HEADERS
+  BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/itch/include
+  FILES
+    itch/include/itch/messages.hpp
+    itch/include/itch/parser.hpp
+    itch/include/itch/mapped_file.hpp
+    itch/include/itch/replay.hpp
+    itch/include/itch/synthetic.hpp)
+
+# ---------------------------------------------------------------------------
 # Dependencies, vendored through FetchContent so that a clone plus a configure
 # is enough to build. Every entry needs a justification in DESIGN.md.
 # ---------------------------------------------------------------------------
@@ -187,10 +214,11 @@ if(OB_BUILD_TESTS)
     test/test_types.cpp
     test/test_book.cpp
     test/test_engine.cpp
-    test/test_differential.cpp)
+    test/test_differential.cpp
+    test/test_itch.cpp)
 
   target_include_directories(ob_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test)
-  target_link_libraries(ob_tests PRIVATE ob ob_flags GTest::gtest_main)
+  target_link_libraries(ob_tests PRIVATE ob ob_itch ob_flags GTest::gtest_main)
 
   # The differential test writes shrunk reproducers into the source tree, where
   # they are committed and replayed on every later run. It therefore needs to know
@@ -251,4 +279,20 @@ if(OB_BUILD_BENCH)
     bench/micro_bench.cpp)
 
   target_link_libraries(ob_micro_bench PRIVATE ob ob_flags ob_bench_flags benchmark::benchmark)
+
+  add_executable(ob_replay_bench
+    bench/replay_bench.cpp)
+
+  target_link_libraries(ob_replay_bench
+    PRIVATE ob ob_itch ob_flags ob_bench_flags benchmark::benchmark)
+endif()
+
+# ---------------------------------------------------------------------------
+# Tools.
+# ---------------------------------------------------------------------------
+if(OB_BUILD_TOOLS)
+  add_executable(itch_gen
+    tools/itch_gen.cpp)
+
+  target_link_libraries(itch_gen PRIVATE ob_itch ob_flags)
 endif()

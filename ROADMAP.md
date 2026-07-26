@@ -39,15 +39,17 @@ not mistake brevity for an oversight.
 
 ## Prerequisites not yet satisfied
 
-**WSL2, needed before Phase 3.** The host has no C++ toolchain outside MSYS2 and no
-Linux environment. Phase 3 wants `mmap`, Phase 4 wants `sched_setaffinity` and core
-isolation. Install needs an elevated shell and a reboot:
+**WSL2, needed before Phase 4.** Installation was started and needs a reboot to
+finish:
 
 ```
 wsl --install -d Ubuntu-24.04
 ```
 
-Phases 1 and 2 do not need it.
+Phase 3 turned out not to need it after all: `MappedFile` implements both the
+`mmap` and the Windows `CreateFileMapping` paths, so the ITCH pipeline is fully
+testable on either host. Phase 4 is where it matters, for `sched_setaffinity` and
+core isolation, neither of which has a Windows equivalent.
 
 **Hardware performance counters, needed for the full Phase 4 method.** `perf stat`
 cache-miss counters require bare-metal Linux. WSL2 runs under a hypervisor that
@@ -74,6 +76,18 @@ Complete. One item deliberately not built:
   are implemented and both are covered by the differential test. Cancel-both and
   decrement-and-cancel are described in DESIGN.md with the reasoning for leaving
   them out: neither demonstrates a mechanism the existing pair does not.
+
+### Phase 3, ITCH 5.0 pipeline
+
+Complete. One item deferred:
+
+- **Validation against a real NASDAQ capture.** Every test runs against synthetic
+  files, which the parser reads through the identical code path. That proves the
+  code is self-consistent and that it implements the specification as written, but
+  it cannot catch a place where the specification and the real feed disagree, and
+  those places exist in any exchange protocol. Downloading a TotalView sample and
+  replaying one symbol from it is the remaining check, and it needs no new code:
+  `MappedFile` plus `ReplayDriver` already handle it. Worth doing before Phase 6.
 
 ### Phase 4, benchmark harness
 
