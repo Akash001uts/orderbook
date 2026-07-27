@@ -48,15 +48,20 @@ release is the complete dataset behind every finding in DESIGN.md.
 Git rejects any file over 100 MB at push time. That limit is not negotiable by
 compressing better, and the numbers were measured on this data rather than assumed:
 
-| | Size | Ratio |
-| --- | --- | --- |
-| Raw ITCH | 5 533 732 B | - |
-| gzip -9, what NASDAQ ships | 1 609 752 B | 3.44x |
-| xz -9 | 1 166 356 B | 4.74x |
+Measured on a 300 MB sample of the real multi-symbol stream, which is the figure
+that matters. An earlier estimate extrapolated from the single symbol slice and came
+out too optimistic, because one symbol's traffic is far more repetitive than the
+whole feed:
 
-xz beats gzip by 38 percent, which takes the 3.52 GB archive to roughly 2.5 GB.
-That is still 25 times over the per-file limit. Git LFS does not close it either:
-the free tier is 1 GB of storage and 1 GB of monthly bandwidth.
+| | Ratio on real multi-symbol ITCH |
+| --- | --- |
+| gzip -9, what NASDAQ ships | 2.34x |
+| xz -9 | 3.91x |
+
+So the 2019-12-30 capture is 7.68 GB decompressed, 3.28 GB as NASDAQ ships it, and
+roughly 2.0 GB under xz. That is a 40 percent saving over gzip and still 20 times
+over the 100 MB per-file limit. Git LFS does not close it either: the free tier is
+1 GB of storage and 1 GB of monthly bandwidth.
 
 Splitting the archive into sub-100 MB chunks would technically pass the check and
 is the wrong answer anyway. It would put 2.5 GB into the git history permanently,
