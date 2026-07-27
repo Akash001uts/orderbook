@@ -18,20 +18,12 @@ namespace ob {
 // dependent loads and three single-cycle instructions, independent of how far
 // apart the occupied levels are.
 //
-// Alternatives considered:
-//
-//   Scan the level array outward from the last known best. O(distance), and the
-//   distance is unbounded: one large cancel at the touch can leave the next
-//   occupied level thousands of ticks away, which turns a cancel into a scan of
-//   tens of kilobytes at exactly the moment the book is busiest.
-//
-//   Cache best_bid and best_ask as plain values. O(1) to read, but repairing them
-//   after the best level empties needs the scan above, so it moves the cost rather
-//   than removing it, and it adds a second source of truth that can disagree with
-//   the levels.
-//
-//   A tree or a heap keyed by price. O(log n) with pointer chasing and allocation,
-//   which is the design this project exists to beat.
+// The alternatives weighed against this, an outward scan from the last known
+// best, a cached best price, and a tree keyed by price, are in DESIGN.md,
+// "Hierarchical bitmaps for best price". Phase 4 also measured the case against
+// this design: a `std::map` answers the same query roughly twice as fast, because
+// it caches its extreme element as a pointer and three dependent loads cannot beat
+// one dereference. That is recorded in BENCHMARKS.md rather than omitted.
 //
 // Invariant, and the sharpest edge in the whole book: a bit is set if and only if
 // the corresponding level has a non-zero order count. Occupancy changes only when

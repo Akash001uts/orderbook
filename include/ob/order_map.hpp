@@ -11,39 +11,34 @@ namespace ob {
 
 // Open addressing map from OrderId to arena index, used by cancel and modify.
 //
-// Why not std::unordered_map: it is specified as a bucket-of-nodes container, so
-// every lookup dereferences a bucket pointer and then walks a chain of separately
-// allocated nodes. Cancel is one of the three hot operations and it starts with
-// exactly one of these lookups, so the difference between one cache line and a
-// pointer chase per cancel is the difference between the design working and not.
-// It also allocates per insert, which the zero-allocation rule forbids outright.
+// Linear probing over a power of two capacity, Fibonacci hashing, backward shift
+// deletion, keys and values in separate arrays. Chosen over `std::unordered_map`
+// because a bucket-of-nodes container puts a pointer chase and an allocation on
+// the first step of every cancel. The full reasoning, and the alternatives
+// weighed against it, are in DESIGN.md, "Open addressing over
+// std::unordered_map".
 //
-// Storage is a structure of arrays: keys in one array, values in another. Linear
-// probing reads nothing but keys until it finds its match, so keeping keys
-// contiguous puts eight candidates in every 64-byte line fetched. Interleaving
-// key and value would put four per line and waste half of each fetch on values
-// belonging to keys that did not match.
+// Invariants this file must preserve:
 //
-// A key of zero marks an empty slot, so no separate occupancy array or tombstone
-// byte is needed. OrderId zero is reserved and rejected on insert. Real venues do
-// not issue it: ITCH 5.0 order reference numbers start at one.
+//   A key of zero marks an empty slot. OrderId zero is reserved and rejected on
+//   insert, which is what removes the need for a separate occupancy array or a
+//   tombstone byte. ITCH 5.0 order reference numbers start at one, so no real
+//   venue collides with it.
 //
-// Deletion is by backward shift, not by tombstone. Tombstones degrade a linear
-// probing table permanently: they keep counting toward the probe length forever,
-// so a long-lived book that cancels heavily, which is every real book, slowly
-// turns every lookup into a scan. Backward shift restores the table to the exact
-// state it would have had if the deleted key were never inserted.
+//   Deletion is by backward shift and never by tombstone. A tombstone counts
+//   toward probe length forever, so a book that cancels heavily degrades
+//   permanently.
+//
+//   An entry may move back into the hole only if its ideal slot does not lie
+//   cyclically within the range being closed. `EveryKeyStaysReachableAcrossHeavyChurn`
+//   in test_book.cpp exists because a naive form of that condition passes every
+//   simple test and loses keys under churn.
 class OrderIdMap {
  public:
   // Capacity is rounded up to a power of two at or above twice expected_orders,
-  // giving a maximum load factor of 0.5.
-  //
-  // Why 0.5: for linear probing the expected probe count on a successful lookup
-  // is about (1 + 1/(1-a)^2)/2. At a load factor of 0.5 that is 2.5 probes, all
-  // of which land in the same or the adjacent cache line. At 0.75 it is 8.5, and
-  // at 0.9 it is 50. The knee is sharp and it is not worth being near it: the
-  // memory saved by a denser table is trivial next to the order arena, and the
-  // cost of being wrong is paid on every single cancel.
+  // giving a maximum load factor of 0.5. The knee in linear probing's expected
+  // probe count is sharp just above that, and the cost of being on the wrong side
+  // of it is paid on every cancel. Figures in DESIGN.md.
   explicit OrderIdMap(std::uint32_t expected_orders) {
     const std::uint64_t wanted = static_cast<std::uint64_t>(expected_orders) * 2U;
     std::uint64_t capacity = 64;

@@ -28,16 +28,14 @@ enum class StpAction : std::uint8_t {
 // parameter it is a compile time constant, so the whole check folds away for the
 // overwhelmingly common case where the two participants differ.
 //
-// Two policies exist rather than one deliberately. A template parameter with a
-// single instantiation is not extensibility, it is the appearance of it, and the
-// second implementation is what proves the seam is real and that the engine
-// handles both outcomes.
+// Two policies exist rather than one deliberately: a template parameter with a
+// single instantiation is the appearance of extensibility rather than the thing
+// itself. Which further policies were left out, and why, is in DESIGN.md, "Self
+// trade prevention as a template parameter".
 //
-// Not implemented, and the reason recorded rather than left as an open question:
-// cancel-both removes both sides, which is simple but punishes a resting order
-// that did nothing wrong; decrement-and-cancel reduces both by the overlap, which
-// is what CME uses and which needs the aggressor's original size threaded through
-// the match loop. Neither adds a mechanism this pair does not already demonstrate.
+// Both policies short circuit on a zero aggressor, which is load bearing rather
+// than an optimisation. Replayed venue orders all carry NO_PARTICIPANT, so without
+// it every venue order would count as self trading with every other one.
 
 // The venue default here and at NASDAQ. The incoming order is by definition the
 // newer of the two, so it is the one that gives way, and a resting order never
