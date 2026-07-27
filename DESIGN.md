@@ -9,6 +9,7 @@ than stubbed: this document tracks what exists.
 - [Determinism as a design constraint](#determinism-as-a-design-constraint)
 - [Strong typedefs over bare integers](#strong-typedefs-over-bare-integers)
 - [Fixed point prices and the tick coordinate](#fixed-point-prices-and-the-tick-coordinate)
+- [Flat direct-indexed levels rather than a tree](#flat-direct-indexed-levels-rather-than-a-tree)
 - [Order layout and why it is 40 bytes](#order-layout-and-why-it-is-40-bytes)
 - [PriceLevel layout and the 24 versus 32 byte question](#pricelevel-layout-and-the-24-versus-32-byte-question)
 - [Events as data, not callbacks](#events-as-data-not-callbacks)
@@ -39,6 +40,9 @@ than stubbed: this document tracks what exists.
 - [Bugs caught by the tests, and what they teach](#bugs-caught-by-the-tests-and-what-they-teach)
 - [Dependency justifications](#dependency-justifications)
 - [Warning flags on an interface target](#warning-flags-on-an-interface-target)
+- [The queue position estimator and its error sources](#the-queue-position-estimator-and-its-error-sources)
+- [The fill model, and how it biases reported P&L](#the-fill-model-and-how-it-biases-reported-pl)
+- [Where this design would break, and what to build instead](#where-this-design-would-break-and-what-to-build-instead)
 - [Out of scope, and why](#out-of-scope-and-why)
 
 ## Determinism as a design constraint
@@ -124,6 +128,72 @@ would catch only in debug.
 so `PriceConfig::on_tick_boundary` exists and callers must use it. The engine
 returns `RejectReason::off_tick` rather than silently rounding, because silent
 rounding changes a customer's price.
+
+## Flat direct-indexed levels rather than a tree
+
+The central decision of the project. Everything else in the book is downstream of
+it.
+
+**Decision.** Price levels live in a flat array of 65 536 `PriceLevel` per side,
+indexed by `price - band_base`. Locating a level is a subtract and a scaled load.
+Occupancy is tracked by a hierarchical bitmap so the best price never requires a
+scan, and prices falling outside the band go to a `std::map` backed cold path.
+
+**Alternatives considered.**
+
+1. A balanced tree keyed by price, which is what `std::map<Price, Level>` gives and
+   what most textbook order books use.
+2. A hash map from price to level.
+3. A sorted vector of occupied levels, binary searched.
+
+**Reasoning.** The operation mix decides it. Every add, cancel and modify begins by
+locating a price level, and that lookup is on the critical path of all three. A
+tree makes it O(log n) with a pointer chase at every hop and an allocation whenever
+a new price is touched, which the zero allocation rule forbids on the hot path
+outright. Direct indexing makes it O(1), branch free, with no indirection and no
+allocation ever.
+
+A hash map removes the log factor but keeps the indirection and gives up ordering,
+and ordering is not incidental here: matching walks levels in price sequence, so a
+structure that cannot iterate in price order has to be paired with one that can. A
+sorted vector keeps ordering and locality but pays O(n) insertion, and insertions at
+new prices are common in a live book.
+
+**The evidence, measured rather than argued.** Phase 4 benchmarked this book
+against the naive `std::map` reference book on an identical command stream in one
+process. Add is 2.7x faster, cancel 5.4x. The mechanism is counted rather than
+inferred: the flat book allocates **0** times per add against the tree's **2.016**,
+a figure that decomposes exactly into one list node, one hash node, and one map
+node per newly occupied level. The working set sweep shows the gap widening from
+2.4x to 3.3x as the book grows from 1 024 to 65 536 live orders, because the tree's
+nodes scatter across the heap while the arena stays contiguous. Full numbers and
+conditions in BENCHMARKS.md.
+
+**The memory cost, accepted deliberately.** 65 536 levels at 24 bytes across two
+sides is **3 MiB of level array per symbol**, for a book that typically has a few
+hundred occupied levels at any moment. A tree would allocate nodes only for levels
+that exist, so it is dramatically smaller in the sparse case. That is a real cost
+and it is accepted rather than explained away.
+
+The reason it is affordable is that footprint and working set are different things.
+Only occupied levels are ever touched, and the bitmap means the empty ones are
+never even scanned, so the resident working set is proportional to the number of
+occupied levels rather than to the width of the band. The 3 MiB is mostly address
+space that never becomes a resident page. The sweep confirms it: the flat book's
+per-add cost rises about 10 percent across a 64-fold increase in live orders, where
+the tree's rises 51 percent.
+
+**The second cost is rebasing.** A fixed window around a moving price has to be
+re-centred when the market leaves it, which is a memmove of the band. It is rare
+but not cheap, and it lands in the latency tail rather than the mean. Measured in
+"Band rebasing, and what it costs", visible in the `p99.99` column for adds in
+BENCHMARKS.md.
+
+**Where this loses, stated here rather than buried.** The best price query costs
+10.2 ns against the tree's 5.38 ns, because `std::map` caches its extreme element
+as a pointer and three dependent bitmap loads cannot beat one dereference. The
+workloads that would defeat the whole structure, rather than just this one query,
+are in "Where this design would break, and what to build instead".
 
 ## Order layout and why it is 40 bytes
 
@@ -965,6 +1035,144 @@ AddressSanitizer needs the entire binary instrumented to be sound.
 codebase narrows 64-bit quantities to 32-bit order fields and mixes signed tick
 offsets with unsigned array indices, which is precisely where those warnings pay.
 
+## The queue position estimator and its error sources
+
+**Decision.** Position is initialised to the level's resting quantity at the moment
+of insertion, decremented by observed executions at that price, and adjusted for
+observed cancels under the assumption that cancels are uniformly distributed
+through the queue: when C shares are cancelled with A estimated ahead and B behind,
+A is reduced by `C * A / (A + B)`.
+
+**Alternatives considered.** All cancels behind us, which is maximally pessimistic
+and always understates fills. All cancels ahead of us, which is maximally
+optimistic and manufactures P&L. Uniform sits between them and is the standard
+choice.
+
+**What is genuinely unknowable, stated precisely.** It is narrower than usually
+claimed. Order-by-order data does report where every real order sits, and this
+project reconstructs exactly that, so the queue is not a black box. What cannot be
+known is where *our* order would have sat, because it is hypothetical: no venue
+assigned it a place, and every order arriving after our notional insertion queued
+behind a book that did not contain us. The counterfactual queue is unobservable at
+any level of feed detail, and no amount of extra data fixes it.
+
+**The error sources, in the order they matter:**
+
+1. **The uniform assumption is optimistic.** Real cancels skew toward recently
+   placed orders and therefore toward the back of the queue, so fewer cancels come
+   from ahead of us than uniform predicts, and our true position is worse than
+   estimated. Not corrected, because correcting it needs a parameter fitted to the
+   data being tested, which is a worse sin than the bias.
+2. **Hidden liquidity is invisible and it sits ahead of us.** TotalView reports
+   displayed orders. Non-displayed interest trades through `P` messages against
+   nothing in the visible book, so the estimator never counts it, yet at a venue it
+   would take priority at the same price. This biases the estimate optimistic in
+   the same direction as the first item.
+3. **Zero latency is assumed.** A quote is treated as resting the instant the
+   message that prompted it is processed. A real participant has wire and decision
+   latency, arrives later, and queues further back. This is optimistic and it is
+   not modelled.
+4. **The book overrides the estimate silently.** `refresh_behind` clamps `ahead` to
+   the level's actual resting quantity whenever the estimate exceeds it. That is
+   correct, since the book is authoritative and the estimate is not, but it
+   discards accumulated estimate error without recording that it did so.
+
+**Direction of the total.** Every named source biases the same way: toward
+believing we are closer to the front than we are. Reported fills should therefore
+be read as an upper bound. Since the baseline strategy loses money on inventory
+rather than on fills, a lower true fill count would improve its result, so the bias
+runs against the conclusion drawn from it, which is the safe direction.
+
+## The fill model, and how it biases reported P&L
+
+**Decision.** Three rules. A trade at our price consumes the queue from the front
+and only the excess reaches us. A trade *through* our price, meaning a resting
+order on our side at a price strictly worse than ours executed, fills us for the
+traded quantity capped at our size. Nothing else fills us.
+
+**Alternative considered: filling on a crossing passive add.** Rejected, and the
+full argument is in "The crossed book, and why the strategy tolerates one". In
+short, an ITCH `A` message is a passive post rather than an aggressive order, so
+filling on it would invent liquidity taking the tape says never happened, in our
+favour, every time.
+
+**Alternative considered: filling any time the market prints at our price.**
+Rejected because it ignores queue priority entirely, which is the single largest
+determinant of whether a passive order actually trades.
+
+**How each rule biases P&L, which is the part that matters:**
+
+| Rule | Direction | Why |
+| --- | --- | --- |
+| Trade at our price | Optimistic | Inherits every bias in the queue estimate above, all of which point the same way |
+| Trade through our price | Optimistic | It is an inference about a counterfactual: we assume the aggressor would have taken us first. 8 of 38 baseline fills come from it, and that count is reported separately so the exposure is visible |
+| No fill on a crossing add | **Pessimistic** | Some of those crossings would in reality have traded with us. This is the one rule that biases against the strategy |
+| No hidden liquidity | Optimistic | Undisplayed size ahead of us would have absorbed fills we are credited with |
+| No market impact | Optimistic | Our quote would have changed other participants' behaviour, and generally for the worse for us |
+
+**Net direction, stated rather than implied.** Four of five point optimistic and
+one points pessimistic, so the model as a whole overstates fills. Whether the
+overstatement is large is not established here, and claiming otherwise would be
+unfounded. What is established is that the reported P&L is dominated by inventory
+rather than by fills, so a model that filled less would report a *better* result
+than the one published. The bias therefore cannot be what produces the loss, which
+is the only claim the numbers support.
+
+**The consequence for reading STRATEGY.md.** Fill count, fill ratio, spread
+capture, and every markout depend heavily on this model. Inventory P&L depends on
+it only weakly, because it is dominated by position size and the market's move.
+Crossed-book statistics, quote counts, and message counts do not depend on it at
+all.
+
+## Where this design would break, and what to build instead
+
+The flat direct-indexed band is the right structure for a liquid equity at a penny
+tick, quoted around a mid that moves slowly relative to the band width. That is a
+real and common case, and it is the case this project targets. It is not the only
+case, and the honest version of a design document names the workloads that would
+defeat it.
+
+**A wide price range relative to tick size.** The band is 65 536 levels. A
+cryptocurrency book at 60 000 with a 0.01 tick spans six million ticks, so the band
+covers about one percent of it and everything else falls to the `std::map` cold
+path, which is orders of magnitude slower. The same applies to FX at fractional
+pips and to options chains on a low priced underlying. *What to build instead:* a
+hash map from price to level, giving O(1) access with no range assumption, paired
+with a sorted structure or a coarse radix summary for the best-price query. The
+direct index is trading range for speed, and past some range the trade stops paying.
+
+**A sparse book.** With three occupied levels spread over thousands of ticks, the
+3 MiB level array is almost entirely cold, and every touch is a miss into a large
+sparse structure. The bitmap still finds the occupied levels quickly, but the array
+they index into is the waste. *What to build instead:* below roughly thirty-two
+levels, a sorted `std::vector` of price and level scanned linearly beats every
+asymptotically better structure, because thirty-two contiguous entries are a handful
+of cache lines and there is no indirection at all.
+
+**A fast trending market.** Rebasing is a memmove of the band and it is rare by
+design, but a market that trends far enough, fast enough, pays it repeatedly, and
+the cost lands in the latency tail rather than the mean. The `p99.99` column for
+adds in BENCHMARKS.md is where it becomes visible. *What to build instead:* a ring
+buffer indexed modulo the band width, which turns a rebase into moving a base
+pointer and clearing the vacated slots, at the cost of more complex index
+arithmetic on every access.
+
+**Many symbols.** The footprint is 19.3 MiB per book at defaults. The 2019-12-30
+capture carries 8 906 symbols, which would be roughly 172 GB. This is not a
+tuning problem, it is a structural one. *What to build instead:* size the band per
+symbol by liquidity tier, share one order arena across all symbols so the dominant
+term is total live orders rather than symbols times capacity, and accept a tree or
+hash structure for the long tail of symbols that trade a few times a day.
+
+**A read-dominated workload.** Phase 4 measured the flat book's `best_bid()` at
+10.2 ns against a `std::map`'s 5.38 ns, because a tree caches its extreme element
+as a pointer and three dependent loads cannot beat one dereference. A workload that
+reads the touch far more often than it mutates the book is a workload this design
+loses. *What to build instead:* cache the best price per side and maintain it on
+the two mutation paths that can change it, which is the alternative the bitmap was
+originally chosen over, and which the measurement suggests deserves revisiting. It
+is recorded as open in ROADMAP.md rather than quietly dropped.
+
 ## Out of scope, and why
 
 Each of the following was considered and excluded. The common thread is that each
@@ -992,6 +1200,15 @@ project, and it would obscure the in-memory data structure work.
 
 **Clustering and replicated matching.** Consensus over an ordered command log is
 a distributed systems project.
+
+**Transactional semantics across commands.** Every command here is already atomic
+with respect to the book: it either applies completely or is rejected without
+mutating anything, which is what the differential test asserts after every single
+command. What is excluded is the larger notion, grouping several commands into a
+unit that can be rolled back together. Venues do not offer it, no order type in
+scope needs it, and adding it would mean either journalling undo information on the
+hot path or copying book state, both of which contradict the zero allocation rule
+for no gain in evidence.
 
 **A web UI.** No engineering signal.
 
