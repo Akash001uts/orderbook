@@ -9,8 +9,10 @@ reasoning live in [DESIGN.md](DESIGN.md).
 
 ## Standing decisions
 
-**Repository visibility.** Private until Phase 6 completes, then public. Not to be
-changed before then.
+**Repository visibility.** Private. Phase 6's documentation work is complete, but
+the owner has asked that the repository stay private for now, so it does. Two
+things gate any later flip: that instruction being lifted, and NASDAQ's terms on
+the committed data slice being confirmed. Neither is a documentation task.
 
 **Effort allocation.** The four items below taught me the most relative to their
 cost, so they got disproportionate effort. Everything else is built
@@ -115,12 +117,27 @@ the HdrHistogram latency harness, and the measurement discipline all landed.
 
 ### Phase 6, documentation
 
-- **Flip the repository to public** once documentation is complete.
-- **Architecture diagram** in README, replacing the current ASCII sketch if a
-  clearer form is warranted.
-- **Audit for anything built but unexplained.** I want to do this deliberately
-  at the end, and it is the check that catches decisions made silently during
-  implementation.
+The documentation work itself is done: the duplication the code review flagged
+is resolved, the design document has been audited against the code, and the README carries the
+headline table and a five command reproduction path. What remains is a decision and
+a permission, neither of which is a writing task.
+
+- **Flipping the repository to public is deliberately deferred.** The owner asked
+  that it not happen yet, so it does not. Nothing in the documentation blocks it.
+- **Confirm NASDAQ's terms before any public flip.** This is the one genuine
+  blocker rather than a preference. Committing a small derived slice for automated
+  testing and republishing a complete copy of an exchange archive are different
+  asks, even though NASDAQ hosts these publicly with no login. While the repository
+  is private this is storage. If the answer turns out to be no, deleting
+  `data/qqq_slice.itch` and relying on `scripts/fetch_nasdaq_sample.sh` costs only
+  convenience, but the tests that assert against the committed slice would need
+  their fixture regenerated on demand. Recorded also in `data/README.md`.
+
+The architecture diagram was reviewed and kept as an ASCII sketch. It fits in a
+terminal, it survives a plain text diff, and it already shows the strategy layer
+feeding the same engine as the replay path, which is the one relationship a reader
+has to understand. A rendered image would look better and say the same thing while
+being invisible to every tool this project is read with.
 
 ## CI budget policy
 

@@ -31,6 +31,9 @@ than stubbed: this document tracks what exists.
 - [Memory mapping rather than reading](#memory-mapping-rather-than-reading)
 - [The synthetic generator, and why it must be semantically valid](#the-synthetic-generator-and-why-it-must-be-semantically-valid)
 - [What a real NASDAQ capture confirmed, and what it revealed](#what-a-real-nasdaq-capture-confirmed-and-what-it-revealed)
+- [Timing by rdtscp, and when the harness refuses to use it](#timing-by-rdtscp-and-when-the-harness-refuses-to-use-it)
+- [The strategy quotes post-only](#the-strategy-quotes-post-only)
+- [Marking against a mid the strategy did not set](#marking-against-a-mid-the-strategy-did-not-set)
 - [The strategy's participant id](#the-strategys-participant-id)
 - [The crossed book, and why the strategy tolerates one](#the-crossed-book-and-why-the-strategy-tolerates-one)
 - [Bugs caught by the tests, and what they teach](#bugs-caught-by-the-tests-and-what-they-teach)
@@ -683,6 +686,93 @@ of the real feed. That matters for Phase 4: a throughput number measured on the
 synthetic mix is not a throughput number for real data, and BENCHMARKS.md now says
 so.
 
+## Timing by rdtscp, and when the harness refuses to use it
+
+**Decision.** Measured regions are timestamped with `rdtscp`, with the TSC's
+invariance verified through `CPUID` leaf `0x80000007` bit 8 and its frequency
+calibrated at startup against `steady_clock`. If either check fails the harness
+falls back to `steady_clock` and prints why.
+
+**Alternative considered: `rdtsc`.** Rejected because it does not wait for prior
+instructions to retire, so it can float above the work being measured. `rdtscp`
+does wait, which closes that direction. The other direction, later instructions
+being hoisted above the read, is closed with an `lfence`: the start stamp fences
+after its read and the end stamp fences before its read, so the measured region
+cannot leak either way.
+
+**Alternative considered: `steady_clock` throughout.** It is correct everywhere
+and needs no verification, which is why it is the fallback rather than the
+default. It is also a function call into the platform's time source, and at the
+tens of nanoseconds these operations cost, that is a large fraction of the
+measurement.
+
+**Why the invariance check is not optional.** A TSC that is not invariant changes
+rate with core frequency. A tick count from one is not a duration, and the error
+varies with load, which means it is largest exactly when the machine is busy and
+the numbers matter most. A harness that silently reported those numbers would be
+worse than one that refused to run, because the caveat does not travel with the
+figure once it is written down. So the check is made, and a failure is loud.
+
+**The cost, measured rather than assumed.** Two timestamps and two fences cost
+about 27 ns per measured region on this machine, which is comparable to the
+operations being measured. That figure is printed alongside every result and is
+deliberately **not** subtracted: removing a noisy estimate from every sample would
+corrupt the tail, and the tail is the reason the harness exists. It also forces a
+second decision, that per message latency and true throughput are measured in
+separate passes, because a throughput figure taken from the instrumented loop is a
+figure for an instrumented engine. Measured, that difference is a factor of 3.5.
+
+## The strategy quotes post-only
+
+**Decision.** Every strategy quote is submitted as `post_only`. A quote that would
+cross the book at submission is rejected and simply not placed.
+
+**Reasoning, first order.** A market maker that crosses the spread is paying the
+spread it exists to earn. Taking is a bug here rather than a feature, so the
+engine is asked to enforce it instead of the strategy being trusted to avoid it.
+
+**Reasoning, second order, and this is the one that matters.** Post-only means the
+strategy can never itself create the crossed book described below. A quote that
+would cross never rests, so every crossed interval that appears in a result was
+caused by a replayed venue add landing through an already resting quote, which is
+precisely the case that decision is about. Without this, the crossed time
+statistic would mix two different phenomena and measure neither.
+
+**The cost.** The strategy declines some fills it could have had by taking. Those
+would have been taker fills at a worse price with a taker fee, so declining them
+is not a loss the P&L should mourn, but the rejection count is reported rather
+than hidden so the frequency is visible.
+
+## Marking against a mid the strategy did not set
+
+**Decision.** The mid used for marking to market, for quote placement, and for
+markouts is computed from the venue's best prices with the strategy's own resting
+orders excluded.
+
+**Reasoning.** The strategy's quotes rest in the same book as the venue's orders,
+which is the whole point of the shared-book design. The consequence is that once a
+quote is at the touch, `best_bid()` may be the strategy's own order, and a mid
+computed from it is a mid the strategy set itself.
+
+Every use of that mid would then be self referential. Quotes would be placed
+relative to a price the previous quote created, which is a feedback loop that walks
+the strategy away from the market. Mark to market would value inventory at a price
+the strategy invented. Markouts would compare a fill against a mid that the fill
+itself moved, which would make adverse selection undetectable in exactly the cases
+where it matters.
+
+**Alternative considered.** Track the venue's best prices separately from the
+book, updated by the replay driver. Rejected as a second source of truth about
+something the book already knows; the two would eventually disagree and the
+disagreement would be silent.
+
+**Implementation, and its cost.** `venue_best` walks outward from the book's best
+price, skipping any level whose entire resting quantity belongs to the strategy.
+That is usually zero or one iteration, because the strategy holds at most one order
+per side. It is not free, and it is on the path of every book update, but a
+backtest is not a latency benchmark and correctness of the price is worth more here
+than the nanoseconds.
+
 ## The strategy's participant id
 
 **Decision.** The strategy quotes under a reserved, nonzero `ParticipantId` of 1,
@@ -847,10 +937,13 @@ The global constraint is that dependencies stay minimal and vendored through CMa
 | --- | --- | --- |
 | GoogleTest | v1.17.0 | Unit and differential tests. Chosen over Catch2 for its parameterised test support, which the differential test uses to run many seeds as separately reported cases. |
 | Google Benchmark | v1.9.4 | Microbenchmarks. It handles iteration count selection, `DoNotOptimize` barriers, and per-iteration statistics, all of which are easy to get subtly wrong by hand. |
+| HdrHistogram_c | 0.11.8 | The latency harness only. Latency here is a tail question, and a fixed width histogram either loses all resolution at the top of the range or needs absurd memory to keep it. This records across a wide dynamic range at constant relative precision, which is the shape of the problem, and it is the reference implementation of that idea rather than something written here and unvalidated. |
 
-HdrHistogram_c is added in Phase 4, where the
-latency harness first needs it. It is not fetched before then, because an unused
-dependency is still a dependency someone has to build.
+HdrHistogram_c was deliberately not fetched until Phase 4, when the harness that
+needs it was written, because an unused dependency is still a dependency someone
+has to build. Its log writer is disabled, since that is the only part requiring
+zlib and nothing here writes histogram logs, and its test submodule is skipped
+because the only thing it vendors is a second copy of Google Benchmark.
 
 Nothing else is fetched.
 
