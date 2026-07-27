@@ -37,24 +37,25 @@ not mistake brevity for an oversight.
   parameter. The signal is that the policy is swappable. Writing three
   implementations of it adds nothing.
 
-## Prerequisites not yet satisfied
+## Host prerequisites
 
-**WSL2, needed before Phase 4.** Installation was started and needs a reboot to
-finish:
-
-```
-wsl --install -d Ubuntu-24.04
-```
+**WSL2, needed before Phase 4. Satisfied on 2026-07-27.** Ubuntu-24.04 is
+installed and boots. No reboot was required: the WSL platform and kernel were
+already present and only the distribution was missing. Core pinning is verified
+working inside the guest, so the `sched_setaffinity` path Phase 4 builds has a host
+that can exercise it.
 
 Phase 3 turned out not to need it after all: `MappedFile` implements both the
 `mmap` and the Windows `CreateFileMapping` paths, so the ITCH pipeline is fully
 testable on either host. Phase 4 is where it matters, for `sched_setaffinity` and
 core isolation, neither of which has a Windows equivalent.
 
-**Hardware performance counters, needed for the full Phase 4 method.** `perf stat`
-cache-miss counters require bare-metal Linux. WSL2 runs under a hypervisor that
-does not expose the PMU to the guest, and GitHub-hosted runners do not expose it
-either, so neither of those closes this gap.
+**Hardware performance counters, still not satisfied and not closable here.**
+`perf stat` cache-miss counters require bare-metal Linux. This was checked inside
+the new guest rather than assumed: `/sys/bus/event_source/devices/` lists only
+`breakpoint`, `kprobe`, `msr`, `power`, `software`, `tracepoint`, and `uprobe`,
+with no `cpu` source of any kind, so there is no hardware counter to read.
+GitHub-hosted runners do not expose one either, so neither host closes this gap.
 
 The mitigation is already built and working: `bench/micro_bench.cpp` sweeps the
 arena capacity with the algorithmic work held constant, so the entire shape of the
