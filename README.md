@@ -13,13 +13,11 @@ rather than a smoke test.
 
 ## Status
 
-Phase 4 of 6 complete. The book, the matching engine, the ITCH 5.0 pipeline, and
-the benchmark harness are built and tested: 93 tests green on GCC and Clang across
-debug, release, relwithdebinfo, and all three sanitizers, with 14 CI jobs covering
-both compilers, every preset, all three sanitizers, clang-tidy, clang-format, the
-differential test, and a libFuzzer run.
-
-Phase 5 needs decided before any of its code is written.
+Phase 5 of 6 complete. The book, the matching engine, the ITCH 5.0 pipeline, the
+benchmark harness, and the market making strategy layer are built and tested: 116
+tests green on GCC and Clang across debug, release, relwithdebinfo, and all three
+sanitizers, with 14 CI jobs covering both compilers, every preset, all three
+sanitizers, clang-tidy, clang-format, the differential test, and a libFuzzer run.
 
 | Phase | Scope | State |
 | --- | --- | --- |
@@ -29,7 +27,7 @@ Phase 5 needs decided before any of its code is written.
 | 3 | ITCH 5.0 zero-copy parser, replay driver, synthetic file generator | complete |
 | 3b | Validated against a real NASDAQ TotalView capture | complete |
 | 4 | Microbenchmarks, HdrHistogram latency harness, `std::map` baseline comparison | complete |
-| 5 | Market maker, queue position estimator, P&L attribution, markouts | not started |
+| 5 | Market maker, queue position estimator, P&L attribution, markouts | complete |
 | 6 | Documentation pass | not started |
 
 The numbers are in [BENCHMARKS.md](BENCHMARKS.md), each with the conditions that
@@ -42,6 +40,13 @@ p50 41 ns and p99.9 227 ns per message.
 Nothing is claimed here that has not been measured, and the one condition that
 could not be met on any available host, an isolated core, is named wherever it
 changes what a number means.
+
+The strategy results are in [STRATEGY.md](STRATEGY.md), and the fill model is
+stated before any P&L because every number is downstream of it. The baseline market
+maker loses money, and the attribution says why: its fills were good at every
+markout horizon out to ten seconds, but with inventory skew disabled it had no way
+to get flat and carried a thousand shares through a dollar decline. Turning skew on
+cuts the inventory loss by a factor of 3.5 while leaving spread capture unchanged.
 
 ### Correctness
 

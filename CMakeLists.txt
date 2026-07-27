@@ -125,6 +125,29 @@ target_sources(ob_itch PUBLIC FILE_SET HEADERS
     itch/include/itch/synthetic.hpp)
 
 # ---------------------------------------------------------------------------
+# Strategy layer.
+#
+# Header only, like the engine, and for the same reason: everything here is a
+# template over the band size or small enough to inline, and a translation unit
+# boundary in the middle of the fill path would hide the thing the benchmarks
+# measure. It depends on both ob and ob_itch because a backtest is the two halves
+# meeting: a venue book reconstructed from ITCH, and hypothetical orders matched
+# against it by the engine.
+# ---------------------------------------------------------------------------
+add_library(ob_strategy INTERFACE)
+
+target_include_directories(ob_strategy INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/strategy/include)
+target_link_libraries(ob_strategy INTERFACE ob ob_itch)
+
+target_sources(ob_strategy INTERFACE FILE_SET HEADERS
+  BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/strategy/include
+  FILES
+    strategy/include/strategy/queue_position.hpp
+    strategy/include/strategy/pnl.hpp
+    strategy/include/strategy/market_maker.hpp
+    strategy/include/strategy/backtest.hpp)
+
+# ---------------------------------------------------------------------------
 # Dependencies, vendored through FetchContent so that a clone plus a configure
 # is enough to build. Every entry needs a justification in DESIGN.md.
 # ---------------------------------------------------------------------------
@@ -250,10 +273,11 @@ if(OB_BUILD_TESTS)
     test/test_book.cpp
     test/test_engine.cpp
     test/test_differential.cpp
-    test/test_itch.cpp)
+    test/test_itch.cpp
+    test/test_strategy.cpp)
 
   target_include_directories(ob_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test)
-  target_link_libraries(ob_tests PRIVATE ob ob_itch ob_flags GTest::gtest_main)
+  target_link_libraries(ob_tests PRIVATE ob ob_itch ob_strategy ob_flags GTest::gtest_main)
 
   # The differential test writes shrunk reproducers into the source tree, where
   # they are committed and replayed on every later run. It therefore needs to know
@@ -379,4 +403,9 @@ if(OB_BUILD_TOOLS)
     tools/itch_replay.cpp)
 
   target_link_libraries(itch_replay PRIVATE ob_itch ob_flags)
+
+  add_executable(ob_strategy_backtest
+    tools/strategy_backtest.cpp)
+
+  target_link_libraries(ob_strategy_backtest PRIVATE ob_strategy ob_flags)
 endif()
