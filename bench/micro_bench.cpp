@@ -1,11 +1,15 @@
+#include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 #include <benchmark/benchmark.h>
 
 #include "ob/book.hpp"
+#include "ob/engine.hpp"
+#include "ob/events.hpp"
 
-// Microbenchmarks for the three Phase 1 hot operations.
+// Microbenchmarks for the book and engine hot operations.
 //
 // Methodology, because the number is worthless without it:
 //
@@ -21,19 +25,30 @@
 // The book is heap allocated because it holds megabytes of level array, and it is
 // rebuilt rather than reset so that no benchmark inherits another's cache state.
 //
-// These numbers are a first look for Phase 1, taken with whatever core the
-// scheduler happened to provide. The disciplined harness, with core pinning,
-// warmup, environment capture, and run-to-run variance, is Phase 4. Nothing here
-// should be quoted as a headline figure.
+// The case set is complete as of Phase 4: the nine operations the phase specifies
+// are all covered, and two of the additions exist to correct measurements Phase 1
+// got wrong rather than to add new ones.
+//
+// The surrounding discipline is not complete. Core pinning, warmup, turbo
+// detection, environment capture, and run-to-run variance are still ahead in this
+// phase, and until they land these numbers are taken on whatever core the
+// scheduler happened to provide. Nothing here should be quoted as a headline
+// figure yet.
 
 namespace {
 
 using ob::AddRequest;
 using ob::AddStatus;
 using ob::Book;
+using ob::CancelNewest;
 using ob::CancelStatus;
+using ob::Command;
+using ob::CommandType;
 using ob::DEFAULT_BAND_LEVELS;
+using ob::Engine;
+using ob::ExecutionEvent;
 using ob::OrderId;
+using ob::OrderType;
 using ob::PriceConfig;
 using ob::Quantity;
 using ob::Side;
@@ -41,6 +56,7 @@ using ob::Ticks;
 using ob::Timestamp;
 
 using BenchBook = Book<DEFAULT_BAND_LEVELS>;
+using BenchEngine = Engine<CancelNewest, DEFAULT_BAND_LEVELS>;
 
 // 65536 live orders, which is a busy but realistic depth for a single liquid
 // symbol. It is not chosen to flatter the numbers, and the first version of this
@@ -213,6 +229,345 @@ void bm_best_price(benchmark::State& state) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// The occupancy bitmap transition, isolated properly.
+//
+// This pair replaces the Phase 1 attempt, which was not a valid comparison and
+// said so in its own naming note. That attempt put an add into an occupied level
+// against an add-then-cancel that kept the book at a single live order, so one arm
+// ran against tens of thousands of orders and the other against one. The arms had
+// entirely different working sets, and the transition cost was nowhere in the
+// difference between them.
+//
+// These two arms are identical in everything that costs time except the property
+// under test. Both hold the book at a constant and equal size, both perform
+// exactly one add and one cancel per iteration, both reuse the same arena slot
+// because the free list is LIFO, and both walk the same toggle levels in the same
+// order. The only difference is the sentinel: the excluded arm rests one order at
+// every toggle level, so the level is already occupied when the probe add arrives
+// and still occupied after the probe cancel, and no bit ever changes. The included
+// arm has no sentinel, so every iteration sets a bit on the add and clears it on
+// the cancel.
+//
+// The difference between the two arms is the cost of the transition. Neither
+// figure means anything alone, and neither should be quoted alone.
+// ---------------------------------------------------------------------------
+
+// Toggle levels sit above the seeded background so the two ranges never interact.
+constexpr std::int32_t TOGGLE_SPREAD = 256;
+
+// Background depth per level, so that both arms measure against a book of
+// realistic size rather than one that fits entirely in L1.
+constexpr std::uint32_t BACKGROUND_DEPTH = 64;
+
+void bitmap_transition_arm(benchmark::State& state, bool seed_sentinels) {
+  std::unique_ptr<BenchBook> book = make_book();
+  std::uint64_t id = 1;
+
+  for (std::int32_t price = 0; price < PRICE_SPREAD; ++price) {
+    for (std::uint32_t depth = 0; depth < BACKGROUND_DEPTH; ++depth) {
+      benchmark::DoNotOptimize(book->add(request_for(id++, price)));
+    }
+  }
+
+  if (seed_sentinels) {
+    for (std::int32_t offset = 0; offset < TOGGLE_SPREAD; ++offset) {
+      benchmark::DoNotOptimize(book->add(request_for(id++, PRICE_SPREAD + offset)));
+    }
+  } else {
+    // The same number of orders, placed in the background instead, so that the
+    // two arms hold identical live counts and the sentinel is the only remaining
+    // difference between them.
+    for (std::int32_t offset = 0; offset < TOGGLE_SPREAD; ++offset) {
+      benchmark::DoNotOptimize(book->add(request_for(id++, offset % PRICE_SPREAD)));
+    }
+  }
+
+  // One probe id, added and cancelled every iteration, so the book size never
+  // drifts and the arena hands back the same slot each time.
+  const std::uint64_t probe_id = id;
+  std::int32_t offset = 0;
+
+  for (auto unused : state) {
+    benchmark::DoNotOptimize(unused);
+    benchmark::DoNotOptimize(book->add(request_for(probe_id, PRICE_SPREAD + offset)));
+    benchmark::DoNotOptimize(book->cancel(OrderId{probe_id}));
+    offset = (offset + 1) % TOGGLE_SPREAD;
+  }
+}
+
+void bm_bitmap_transition_included(benchmark::State& state) {
+  bitmap_transition_arm(state, false);
+}
+
+void bm_bitmap_transition_excluded(benchmark::State& state) {
+  bitmap_transition_arm(state, true);
+}
+
+// ---------------------------------------------------------------------------
+// Cancel by queue position.
+//
+// The claim under test is that cancel costs the same wherever the order sits in
+// its level's queue, because the id map goes straight to the arena slot and the
+// intrusive links splice it out without a walk. A design that stores each level as
+// a list and searches it would show head, middle, and tail diverging sharply.
+// These three arms are the evidence for or against that claim.
+// ---------------------------------------------------------------------------
+
+enum class QueuePosition : std::uint8_t { head, middle, tail };
+
+constexpr std::uint32_t QUEUE_DEPTH = 64;
+constexpr std::int32_t QUEUE_LEVELS = 512;
+
+// The exact sequence of ids to cancel so that every cancel removes the order then
+// standing at the requested position of its level's queue.
+//
+// Precomputed rather than discovered inside the timed region, because locating the
+// middle of an intrusive list requires a walk, and that walk is precisely the work
+// this benchmark exists to show the book never performs. Measuring it would answer
+// a different question. All three positions yield a sequence of the same length,
+// and the timed loop consumes all three identically, one sequential vector element
+// per iteration, so the arms stay comparable.
+//
+// The walk is round robin across levels rather than draining one level at a time,
+// so that consecutive cancels touch different levels and no arm gets an
+// artificially hot single level.
+std::vector<std::uint64_t> cancel_sequence(QueuePosition position) {
+  std::vector<std::vector<std::uint64_t>> live(static_cast<std::size_t>(QUEUE_LEVELS));
+
+  for (std::int32_t level = 0; level < QUEUE_LEVELS; ++level) {
+    const std::uint64_t base = (static_cast<std::uint64_t>(level) * QUEUE_DEPTH) + 1U;
+    std::vector<std::uint64_t>& queue = live[static_cast<std::size_t>(level)];
+    queue.reserve(QUEUE_DEPTH);
+    for (std::uint32_t slot = 0; slot < QUEUE_DEPTH; ++slot) {
+      queue.push_back(base + slot);
+    }
+  }
+
+  std::vector<std::uint64_t> sequence;
+  sequence.reserve(static_cast<std::size_t>(QUEUE_LEVELS) * QUEUE_DEPTH);
+
+  for (std::uint32_t pass = 0; pass < QUEUE_DEPTH; ++pass) {
+    for (std::int32_t level = 0; level < QUEUE_LEVELS; ++level) {
+      std::vector<std::uint64_t>& queue = live[static_cast<std::size_t>(level)];
+      std::size_t index = 0;
+      switch (position) {
+        case QueuePosition::head:
+          index = 0;
+          break;
+        case QueuePosition::middle:
+          index = queue.size() / 2U;
+          break;
+        case QueuePosition::tail:
+          index = queue.size() - 1U;
+          break;
+      }
+      sequence.push_back(queue[index]);
+      queue.erase(queue.begin() + static_cast<std::ptrdiff_t>(index));
+    }
+  }
+
+  return sequence;
+}
+
+void cancel_at_queue_position(benchmark::State& state, QueuePosition position) {
+  const std::vector<std::uint64_t> sequence = cancel_sequence(position);
+
+  std::unique_ptr<BenchBook> book;
+
+  const auto rebuild = [&book]() {
+    book = make_book();
+    for (std::int32_t level = 0; level < QUEUE_LEVELS; ++level) {
+      const std::uint64_t base = (static_cast<std::uint64_t>(level) * QUEUE_DEPTH) + 1U;
+      for (std::uint32_t slot = 0; slot < QUEUE_DEPTH; ++slot) {
+        benchmark::DoNotOptimize(book->add(request_for(base + slot, level)));
+      }
+    }
+  };
+
+  rebuild();
+  std::size_t next = 0;
+
+  for (auto unused : state) {
+    benchmark::DoNotOptimize(unused);
+    if (next == sequence.size()) {
+      state.PauseTiming();
+      rebuild();
+      next = 0;
+      state.ResumeTiming();
+    }
+    benchmark::DoNotOptimize(book->cancel(OrderId{sequence[next]}));
+    ++next;
+  }
+}
+
+void bm_cancel_queue_head(benchmark::State& state) {
+  cancel_at_queue_position(state, QueuePosition::head);
+}
+
+void bm_cancel_queue_middle(benchmark::State& state) {
+  cancel_at_queue_position(state, QueuePosition::middle);
+}
+
+void bm_cancel_queue_tail(benchmark::State& state) {
+  cancel_at_queue_position(state, QueuePosition::tail);
+}
+
+// Modify down, the in-place quantity reduction that preserves queue position.
+//
+// Each iteration reduces a different order by one share, cycling a working set of
+// MODIFY_ORDERS so that no single order stays pinned in L1 and the measurement
+// reflects a realistic spread of touched lines. The new quantity is derived from a
+// pass counter rather than tracked in a side array, which keeps the timed region
+// down to the modify itself while still guaranteeing the strictly decreasing
+// quantity that the reduction path requires. The rebuild guard is unreachable in
+// any run of realistic length and exists so the benchmark cannot silently start
+// measuring the increase path instead.
+constexpr std::uint64_t MODIFY_START = 1U << 20;
+constexpr std::uint64_t MODIFY_ORDERS = 4096;
+
+void bm_modify_down(benchmark::State& state) {
+  std::unique_ptr<BenchBook> book;
+
+  const auto rebuild = [&book]() {
+    book = make_book();
+    for (std::uint64_t index = 0; index < MODIFY_ORDERS; ++index) {
+      AddRequest request = request_for(index + 1U, static_cast<std::int32_t>(index % PRICE_SPREAD));
+      request.quantity = Quantity{MODIFY_START};
+      benchmark::DoNotOptimize(book->add(request));
+    }
+  };
+
+  rebuild();
+
+  std::uint64_t index = 0;
+  std::uint64_t pass = 1;
+
+  for (auto unused : state) {
+    benchmark::DoNotOptimize(unused);
+    benchmark::DoNotOptimize(book->modify(OrderId{index + 1U}, Quantity{MODIFY_START - pass}));
+    ++index;
+    if (index == MODIFY_ORDERS) {
+      index = 0;
+      ++pass;
+      if (pass >= MODIFY_START) {
+        state.PauseTiming();
+        rebuild();
+        pass = 1;
+        state.ResumeTiming();
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Aggressive orders that cross resting liquidity.
+//
+// These are the only benchmarks here that go through the engine rather than the
+// book, because matching is the engine's job. The book is seeded with one resting
+// sell per level and no bids, so an aggressive buy crosses a known, exact number
+// of levels and nothing rests afterwards. Quantity is matched exactly to the
+// liquidity consumed, so the aggressor is always fully filled and never becomes a
+// resting bid that would change the shape of the book underneath the next
+// iteration.
+// ---------------------------------------------------------------------------
+
+constexpr std::int32_t CROSS_LEVELS = 8192;
+constexpr std::uint64_t CROSS_QTY = 100;
+
+// The engine needs a sink exposing push. Counting is enough: it keeps the sink out
+// of the measurement while still stopping the compiler from concluding that the
+// events are unused.
+struct CountingSink {
+  std::uint64_t events = 0;
+
+  void push(const ExecutionEvent& /*event*/) noexcept { ++events; }
+};
+
+BenchEngine::Config bench_engine_config() {
+  BenchEngine::Config config;
+  config.price = PriceConfig{.tick_size = 100, .price_scale = 10000, .base_price = 1000000};
+  config.arena_capacity = ARENA_CAPACITY;
+  config.initial_center = Ticks{0};
+  return config;
+}
+
+Command resting_sell(std::uint64_t id, std::int32_t tick, const PriceConfig& price_config) {
+  Command command;
+  command.id = OrderId{id};
+  command.type = CommandType::add;
+  command.order_type = OrderType::limit;
+  command.side = Side::sell;
+  command.price = price_config.to_price(Ticks{tick});
+  command.quantity = Quantity{CROSS_QTY};
+  command.timestamp = Timestamp{id};
+  return command;
+}
+
+Command aggressive_buy(std::uint64_t id,
+                       std::int32_t limit_tick,
+                       std::uint64_t quantity,
+                       const PriceConfig& price_config) {
+  Command command;
+  command.id = OrderId{id};
+  command.type = CommandType::add;
+  command.order_type = OrderType::limit;
+  command.side = Side::buy;
+  command.price = price_config.to_price(Ticks{limit_tick});
+  command.quantity = Quantity{quantity};
+  command.timestamp = Timestamp{id};
+  return command;
+}
+
+void cross_levels(benchmark::State& state, std::int32_t levels_per_cross) {
+  const BenchEngine::Config config = bench_engine_config();
+
+  std::unique_ptr<BenchEngine> engine;
+  CountingSink sink;
+
+  const auto rebuild = [&engine, &sink, &config]() {
+    engine = std::make_unique<BenchEngine>(config);
+    for (std::int32_t tick = 0; tick < CROSS_LEVELS; ++tick) {
+      engine->submit(resting_sell(static_cast<std::uint64_t>(tick) + 1U, tick, config.price), sink);
+    }
+  };
+
+  rebuild();
+
+  std::int32_t next_tick = 0;
+  std::uint64_t taker_id = static_cast<std::uint64_t>(CROSS_LEVELS) + 1U;
+
+  for (auto unused : state) {
+    benchmark::DoNotOptimize(unused);
+    if (next_tick + levels_per_cross > CROSS_LEVELS) {
+      state.PauseTiming();
+      rebuild();
+      next_tick = 0;
+      state.ResumeTiming();
+    }
+
+    const std::int32_t limit_tick = next_tick + levels_per_cross - 1;
+    engine->submit(aggressive_buy(taker_id,
+                                  limit_tick,
+                                  CROSS_QTY * static_cast<std::uint64_t>(levels_per_cross),
+                                  config.price),
+                   sink);
+    ++taker_id;
+    next_tick += levels_per_cross;
+  }
+
+  benchmark::DoNotOptimize(sink.events);
+  state.counters["levels_crossed"] = levels_per_cross;
+}
+
+void bm_cross_one_level(benchmark::State& state) {
+  cross_levels(state, 1);
+}
+
+void bm_cross_ten_levels(benchmark::State& state) {
+  cross_levels(state, 10);
+}
+
 // The same add as bm_add_existing_level, swept over arena capacity.
 //
 // This exists because the first Phase 1 run reported roughly 54 ns for an
@@ -283,6 +638,17 @@ BENCHMARK(bm_add_cancel_round_trip_hot);
 BENCHMARK(bm_cancel_head);
 BENCHMARK(bm_lookup);
 BENCHMARK(bm_best_price);
+
+// Registered adjacently and deliberately: each pair or triple is only meaningful
+// read against its siblings, never as an individual row.
+BENCHMARK(bm_bitmap_transition_included);
+BENCHMARK(bm_bitmap_transition_excluded);
+BENCHMARK(bm_cancel_queue_head);
+BENCHMARK(bm_cancel_queue_middle);
+BENCHMARK(bm_cancel_queue_tail);
+BENCHMARK(bm_modify_down);
+BENCHMARK(bm_cross_one_level);
+BENCHMARK(bm_cross_ten_levels);
 
 }  // namespace
 

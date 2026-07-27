@@ -228,6 +228,77 @@ Every published result will carry the conditions that produced it:
 The exact command will be recorded here alongside the results table, so that a
 reader can rerun it rather than trust it.
 
+## Phase 4 results so far, the corrected comparisons
+
+The nine case microbenchmark set is complete. The measurement discipline around it
+is not: core pinning, warmup, turbo detection, and environment capture are still
+ahead in this phase. **Every caveat from the Phase 1 first look still applies to
+the absolute numbers below**, and they are published as comparisons rather than as
+figures precisely because the comparisons survive the noise that the absolute
+values do not.
+
+Conditions are the same machine and toolchain as the Phase 1 table above, GCC
+16.1.0 at `-O3 -march=native`, Google Benchmark, 15 repetitions, 0.6 s minimum per
+repetition, median reported, with the run-to-run coefficient of variation next to
+each figure so the reader can see which rows are solid.
+
+### The occupancy bitmap transition, now measured correctly
+
+This resolves the second of the three open items carried in from Phase 1. The old
+comparison was invalid, and the new one is a paired design: both arms hold the book
+at an identical live order count, perform one add and one cancel per iteration,
+reuse the same arena slot, and walk the same levels. The only difference is a
+sentinel order that keeps the toggle level occupied in one arm, so that no bitmap
+bit ever changes there.
+
+| Arm | ns | CV | What differs |
+| --- | --- | --- | --- |
+| Transition included | 9.50 | 2.30 % | Level goes empty to occupied and back, one bit set and one bit cleared |
+| Transition excluded | 8.29 | 3.52 % | Sentinel keeps the level occupied throughout, no bit changes |
+
+The difference is about 1.2 ns for the pair, so roughly 0.6 ns or two cycles per
+transition. The gap is three to four standard deviations wide, so unlike the Phase
+1 attempt it is a real difference rather than noise.
+
+**The direction is the point.** The Phase 1 measurement had the arm doing strictly
+more work coming out faster, which is impossible and is what exposed the flaw. Here
+the arm that touches the bitmap is the slower one, by an amount that a bit set, a
+bit clear, and the surrounding occupancy bookkeeping can actually account for.
+
+### Cancel does not care where the order sits in its queue
+
+Each level holds 64 orders. A design that stored levels as a list and searched them
+would make the tail roughly 64 times the cost of the head.
+
+| Position in queue | ns | CV |
+| --- | --- | --- |
+| Head | 10.0 | 1.45 % |
+| Middle | 11.6 | 6.29 % |
+| Tail | 11.2 | 1.24 % |
+
+Tail over head is 1.12, not 64. That is the intrusive-link claim demonstrated: the
+id map goes straight to the arena slot and the links splice it out without a walk.
+
+The honest wrinkle is that the three are not exactly equal, and the middle arm is
+about 1.5 ns slower than the head arm, which is outside the noise. That is not an
+algorithmic cost, because an algorithmic walk would show up as a factor rather than
+as 15 percent. It is the access pattern: the middle arm cancels a scattered id
+sequence, so its id map probes and arena touches predict and prefetch worse than
+the head arm's more ordered sequence. Reported rather than smoothed over.
+
+### The remaining new cases
+
+| Operation | ns | CV | Notes |
+| --- | --- | --- | --- |
+| Modify down | 4.26 | 1.76 % | In-place quantity reduction, queue position preserved. The cheapest operation the book has, as expected: a lookup and a field write, no link or bitmap work |
+| Aggressive order crossing one level | 38.1 | 22.2 % | Consumes one resting order and empties its level. The high variance is the unpinned hybrid CPU and is exactly what the Phase 4 discipline is meant to remove |
+| Aggressive order crossing ten levels | 351 | 2.96 % | Consumes ten levels in one command |
+
+Ten levels costs 9.2 times one level, so the marginal cost of each additional level
+is about 35 ns against a first level of 38 ns. Crossing is therefore very close to
+linear in levels consumed, with only a small fixed per-command component, which is
+what a level walk with a bitmap-driven next-level lookup should produce.
+
 ## Where this design is weak
 
 This section will be populated with measured weaknesses at Phase 4. It exists now

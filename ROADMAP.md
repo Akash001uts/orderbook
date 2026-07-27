@@ -106,13 +106,13 @@ synthetic number as a proxy for real throughput.
   `std::optional` return being materialised to memory rather than kept in
   registers, and the benchmark's `DoNotOptimize` barrier forcing a store. Recorded
   in BENCHMARKS.md as open.
-- **Isolate the occupancy bitmap transition properly.** The Phase 1 attempt
-  compared an add-into-occupied-level against an add-then-cancel that kept the book
-  at one live order, so the two had entirely different working sets and the
-  comparison was meaningless. A correct version holds the working set fixed across
-  both arms.
 - **HdrHistogram dependency.** Not fetched yet, deliberately. An unused dependency
   is still a dependency someone has to build. It arrives with the latency harness.
+- **The measurement discipline itself**, which is the part of Phase 4 that is not
+  a benchmark: core pinning through `sched_setaffinity`, configurable warmup, turbo
+  and frequency-scaling detection, full environment capture, and run-to-run
+  variance reported rather than a cherry-picked run. The microbenchmark set is
+  complete without it, but no number from that set is quotable until this lands.
 
 ### Phase 6, documentation
 
