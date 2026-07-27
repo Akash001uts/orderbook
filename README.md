@@ -15,7 +15,11 @@ rather than a smoke test.
 
 Phase 3 of 6 complete and validated against a real NASDAQ capture. The book, the
 matching engine, and the ITCH 5.0 pipeline are built and tested: 93 tests green on
-GCC and Clang across debug, release, relwithdebinfo, and all three sanitizers.
+GCC and Clang across debug, release, relwithdebinfo, and all three sanitizers, with
+14 CI jobs covering both compilers, every preset, all three sanitizers, clang-tidy,
+clang-format, the differential test, and a libFuzzer run.
+
+Phase 4 needs.
 
 | Phase | Scope | State |
 | --- | --- | --- |
@@ -163,12 +167,16 @@ optimistic model.
 | `test/` | Unit, differential, and fuzz tests, plus the reference oracle |
 | `tools/` | Synthetic ITCH generator and the replay CLI |
 | `data/` | A committed slice of a real NASDAQ capture, see `data/README.md` |
-| `scripts/` | Fetch a full NASDAQ sample day |
+| `scripts/` | Fetch a NASDAQ sample day, publish a full capture as release assets |
 
-## Design
+## Documents
 
-Every non-obvious decision, the alternatives considered, and the reasoning are in
-[DESIGN.md](DESIGN.md), including the places this design is the wrong choice.
+| | |
+| --- | --- |
+| [DESIGN.md](DESIGN.md) | Every non-obvious decision, the alternatives considered, the reasoning, and the places this design is the wrong choice. The single source of truth. |
+| [BENCHMARKS.md](BENCHMARKS.md) | Measured results with the conditions that produced them, and what is wrong with them. |
+| [ROADMAP.md](ROADMAP.md) | Agreed but deferred work, and what is deliberately kept cheap. |
+| [data/README.md](data/README.md) | Market data provenance, and why the full capture is a release asset rather than a repository file. |
 
 ## Scope
 
