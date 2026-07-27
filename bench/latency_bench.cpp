@@ -325,13 +325,22 @@ class Histograms {
   hdr_histogram* total_ = nullptr;
 };
 
+// One column per statement rather than one long chained expression. The chained
+// form is formatted differently by clang-format 18 and clang-format 22, and CI
+// runs 18 while this host has 22, so the concise version fails a check that
+// cannot be reproduced locally. Short statements format identically under both.
 void print_percentile_header() {
-  std::cout << "\n"
-            << std::left << std::setw(20) << "message type" << std::right << std::setw(12)
-            << "count" << std::setw(9) << "p50" << std::setw(9) << "p90" << std::setw(9) << "p99"
-            << std::setw(10) << "p99.9" << std::setw(11) << "p99.99" << std::setw(11) << "max"
-            << std::setw(9) << "mean"
-            << "\n";
+  std::cout << "\n";
+  std::cout << std::left << std::setw(20) << "message type" << std::right;
+  std::cout << std::setw(12) << "count";
+  std::cout << std::setw(9) << "p50";
+  std::cout << std::setw(9) << "p90";
+  std::cout << std::setw(9) << "p99";
+  std::cout << std::setw(10) << "p99.9";
+  std::cout << std::setw(11) << "p99.99";
+  std::cout << std::setw(11) << "max";
+  std::cout << std::setw(9) << "mean";
+  std::cout << "\n";
   std::cout << std::string(100, '-') << "\n";
 }
 
