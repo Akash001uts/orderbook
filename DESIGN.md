@@ -31,6 +31,8 @@ than stubbed: this document tracks what exists.
 - [Memory mapping rather than reading](#memory-mapping-rather-than-reading)
 - [The synthetic generator, and why it must be semantically valid](#the-synthetic-generator-and-why-it-must-be-semantically-valid)
 - [What a real NASDAQ capture confirmed, and what it revealed](#what-a-real-nasdaq-capture-confirmed-and-what-it-revealed)
+- [The strategy's participant id](#the-strategys-participant-id)
+- [The crossed book, and why the strategy tolerates one](#the-crossed-book-and-why-the-strategy-tolerates-one)
 - [Bugs caught by the tests, and what they teach](#bugs-caught-by-the-tests-and-what-they-teach)
 - [Dependency justifications](#dependency-justifications)
 - [Warning flags on an interface target](#warning-flags-on-an-interface-target)
@@ -680,6 +682,80 @@ deletes. It also emits no net order imbalance messages at all, which are 9.0 per
 of the real feed. That matters for Phase 4: a throughput number measured on the
 synthetic mix is not a throughput number for real data, and BENCHMARKS.md now says
 so.
+
+## The strategy's participant id
+
+**Decision.** The strategy quotes under a reserved, nonzero `ParticipantId` of 1,
+named `STRATEGY_PARTICIPANT`. Replayed venue orders keep `NO_PARTICIPANT`.
+
+**Why this needs stating at all.** The replay driver never sets a participant, so
+before Phase 5 every order in the book carried `NO_PARTICIPANT` and self trade
+prevention was structurally inert. Both STP policies short circuit on
+`aggressor == NO_PARTICIPANT`, which is correct and necessary: without it every
+venue order would count as self trading with every other venue order, since they
+all share the zero id. The consequence is that STP does nothing at all until
+somebody in the book has a real id.
+
+**Alternative considered.** Give each venue order a synthetic id derived from its
+MPID, available on `F` messages. Rejected because the MPID is present on a minority
+of adds and absent from every execution, cancel, delete and replace, so the
+attribution would be both partial and inconsistent, and STP would fire on an
+arbitrary subset of the book.
+
+**The cost, stated plainly.** With one nonzero participant, STP can only ever
+prevent the strategy from trading with itself. That is exactly the case worth
+preventing here, because a market maker quoting both sides is the textbook way to
+cross your own quote, and doing so on a backtest would manufacture fills and P&L
+out of nothing. It is also the only case this data can support.
+
+## The crossed book, and why the strategy tolerates one
+
+**Decision.** When a replayed venue add lands at a price that crosses a resting
+strategy order, the book is allowed to enter and remain crossed. The crossing add
+does **not** fill the strategy. The crossed state is measured instead: its
+frequency, its total duration, and the worst crossing depth are reported with every
+backtest.
+
+**The problem.** Replay applies venue adds directly rather than matching them, for
+the reasons in "Replay reconstructs; it does not re-match". That is correct while
+the book holds only venue orders, because the venue's own book never crosses. Once
+a strategy order rests in the same book it stops being correct, because a venue add
+priced through the strategy's quote produces a state no real book would show.
+
+**Alternative one: treat the crossing add as a fill.** The argument for it is that
+in the counterfactual world where our quote existed, the incoming participant would
+have traded with us rather than posting behind. The argument against it is
+decisive: **an ITCH `A` message is a passive add, not an aggressive order.** An
+order that actually took liquidity appears as `E` or `C` executions against the
+orders it hit. Treating a passive post as a fill would invent liquidity taking that
+the tape says did not happen, at our price, in our favour, every time. That is the
+single most flattering assumption available in this entire project, so the rule I
+settled on is that fills come only from the market trading through.
+
+**Alternative two: keep strategy orders out of the shared book.** Structurally
+impossible to cross, but it discards what the shared book is for. The recorded
+decision in "Replay reconstructs; it does not re-match" is that strategy orders
+contend in the same book so their fills interact with real queue dynamics rather
+than with a separate optimistic model. A parallel structure is that separate model.
+
+**Reasoning for tolerating.** A crossed book is not a corrupted book. Nothing in
+`Book` requires bid and ask to be disjoint; the invariant lives in the matching
+engine, and replay does not match. So the state is representable and the cost of
+allowing it is bounded.
+
+More importantly, the frequency of crossing **is itself the measurement that
+matters**. Every crossed interval is a period where the strategy's quote sat inside
+the real spread and nobody traded with it. That is precisely where a backtest's
+optimism would hide, so counting it converts an unfalsifiable assumption into a
+reported number. A configuration that spends a large fraction of its time crossed
+has quoted through the market, and its P&L should be read as depending on an
+assumption this project refuses to make. Reporting the duration says so in a way a
+reader can check.
+
+**The cost.** Mid price is computed from a crossed book while it is crossed, so
+mark to market during those intervals is taken against a mid that no participant
+could trade at. The backtest reports crossed time alongside P&L for that reason,
+and a run with meaningful crossed time is not a run whose P&L should be quoted.
 
 ## Bugs caught by the tests, and what they teach
 
