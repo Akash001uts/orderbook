@@ -13,13 +13,13 @@ rather than a smoke test.
 
 ## Status
 
-Phase 3 of 6 complete and validated against a real NASDAQ capture. The book, the
-matching engine, and the ITCH 5.0 pipeline are built and tested: 93 tests green on
-GCC and Clang across debug, release, relwithdebinfo, and all three sanitizers, with
-14 CI jobs covering both compilers, every preset, all three sanitizers, clang-tidy,
-clang-format, the differential test, and a libFuzzer run.
+Phase 4 of 6 complete. The book, the matching engine, the ITCH 5.0 pipeline, and
+the benchmark harness are built and tested: 93 tests green on GCC and Clang across
+debug, release, relwithdebinfo, and all three sanitizers, with 14 CI jobs covering
+both compilers, every preset, all three sanitizers, clang-tidy, clang-format, the
+differential test, and a libFuzzer run.
 
-Phase 4 needs.
+Phase 5 needs decided before any of its code is written.
 
 | Phase | Scope | State |
 | --- | --- | --- |
@@ -28,13 +28,20 @@ Phase 4 needs.
 | 2 | Matching engine, order types, differential test against a `std::map` oracle | complete |
 | 3 | ITCH 5.0 zero-copy parser, replay driver, synthetic file generator | complete |
 | 3b | Validated against a real NASDAQ TotalView capture | complete |
-| 4 | Microbenchmarks, HdrHistogram latency harness, `std::map` baseline comparison | not started |
+| 4 | Microbenchmarks, HdrHistogram latency harness, `std::map` baseline comparison | complete |
 | 5 | Market maker, queue position estimator, P&L attribution, markouts | not started |
 | 6 | Documentation pass | not started |
 
-A first look at the numbers is in [BENCHMARKS.md](BENCHMARKS.md), published with
-the reasons it is not yet trustworthy. The disciplined harness lands in Phase 4.
-Nothing is claimed here that has not been measured.
+The numbers are in [BENCHMARKS.md](BENCHMARKS.md), each with the conditions that
+produced it. The short version: against a naive `std::map` book on an identical
+workload the flat book is 2.7x faster on add, 5.4x on cancel, and **1.9x slower on
+the best price query**, which is reported because a comparison that only went one
+way would be advertising. Replaying a real NASDAQ capture puts the whole feed at
+p50 41 ns and p99.9 227 ns per message.
+
+Nothing is claimed here that has not been measured, and the one condition that
+could not be met on any available host, an isolated core, is named wherever it
+changes what a number means.
 
 ### Correctness
 
