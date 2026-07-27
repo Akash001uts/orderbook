@@ -93,19 +93,15 @@ synthetic number as a proxy for real throughput.
 
 ### Phase 4, benchmark harness
 
-- **`std::map` baseline comparison.** Blocked on `test/reference_book.hpp`, which
-  Phase 2 creates, and on the latency harness. Publish both implementations'
-  numbers on an identical workload, with the speedup ratio explained rather than
-  just stated. What does the explaining is settled and written down in
-  BENCHMARKS.md: allocation counts from the existing `operator new` replacement, a
-  working set sweep run on both implementations, and a structural pointer hop count
-  per operation. Not `perf stat`, which no host here can read.
-- **Resolve the best-price query cost.** Phase 1 measured 13.4 ns for
-  `best_bid()`, which is slower than three dependent loads into 8 KiB of resident
-  structure plus three bit instructions should cost. Candidates are the
-  `std::optional` return being materialised to memory rather than kept in
-  registers, and the benchmark's `DoNotOptimize` barrier forcing a store. Recorded
-  in BENCHMARKS.md as open.
+- **Decide what to do about the best-price query.** No longer a measurement
+  question. The Phase 4 baseline settled the size of it: the flat book's
+  `best_bid()` costs 10.2 ns against the naive `std::map` book's 5.38 ns on an
+  identical workload, so the bitmap descent loses to a tree that caches its extreme
+  element as a pointer. Three dependent loads cannot beat one dereference. The
+  options are to cache the best price per side and maintain it on the mutation
+  paths, to return something cheaper than `std::optional`, or to accept the cost
+  and say so. This needs a decision in the DESIGN.md decision/alternatives/cost
+  format, not another benchmark.
 - **HdrHistogram dependency.** Not fetched yet, deliberately. An unused dependency
   is still a dependency someone has to build. It arrives with the latency harness.
 - **The measurement discipline itself**, which is the part of Phase 4 that is not

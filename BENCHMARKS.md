@@ -135,7 +135,16 @@ performs three dependent loads into structures totalling 8 KiB per side, which
 should be resident, plus three bit manipulation instructions. Candidate
 explanations are the `std::optional` return being materialised rather than kept in
 registers, and the benchmark's `DoNotOptimize` barrier forcing a store. This is
-recorded as open rather than quietly dropped, and Phase 4 resolves it.
+recorded as open rather than quietly dropped.
+
+**Still open, and the Phase 4 baseline made it sharper rather than resolving it.**
+Measured against the naive book on an identical workload the flat book's best bid
+costs 10.2 ns against the tree's 5.38 ns, so this is not merely slower than its
+instruction count suggests, it is slower than a `std::map` doing the same job.
+`std::map` caches its extreme element as a pointer; the bitmap descent cannot beat
+a dereference. Whether the fix is caching the best price per side, returning
+something cheaper than `std::optional`, or accepting the cost, it needs a decision
+rather than another measurement.
 
 ### Reproduction
 
@@ -169,7 +178,8 @@ max in nanoseconds, broken out by message type, plus throughput in messages per
 second. Averages will not be reported alone. A mean hides the tail, and the tail
 is the number that matters in this domain.
 
-**Comparative baseline**: the naive `std::map<Price, std::list<Order>>` reference
+**Comparative baseline**, now measured, results under "The comparative baseline
+against `std::map`" below: the naive `std::map<Price, std::list<Order>>` reference
 book from `test/reference_book.hpp` measured on the identical workload, with both
 numbers published.
 
@@ -298,6 +308,99 @@ Ten levels costs 9.2 times one level, so the marginal cost of each additional le
 is about 35 ns against a first level of 38 ns. Crossing is therefore very close to
 linear in levels consumed, with only a small fixed per-command component, which is
 what a level walk with a bitmap-driven next-level lookup should produce.
+
+### The comparative baseline against `std::map`
+
+The headline of the phase. Both implementations receive an identical command
+stream in the same order, in the same process, and store their events into the
+same kind of vector, so event handling cannot tilt the result. The naive book is
+`test/reference_book.hpp`, which matters: it is not a strawman written for this
+benchmark, it is the oracle the differential test checks the engine against, so it
+is the implementation whose agreement with the fast one is what the correctness
+argument rests on.
+
+Run with `ob_baseline_bench`, 9 repetitions, medians reported.
+
+| Operation | Flat book | `std::map` book | Ratio |
+| --- | --- | --- | --- |
+| Add, resting | 26.9 ns | 73.5 ns | **2.7x faster** |
+| Cancel | 10.3 ns | 56.0 ns | **5.4x faster** |
+| Match, one level consumed | 38.7 ns | 65.2 ns | **1.7x faster** |
+| Best bid query | 10.2 ns | 5.38 ns | **1.9x slower** |
+
+**The flat book loses the best price query, and that is a real result rather than
+a measurement artifact.** `std::map` keeps cached begin and end pointers, so asking
+it for its extreme element is a pointer dereference. The flat book descends a
+three-level bitmap: three dependent loads plus the bit instructions. A tree is
+genuinely better at this one operation, and it is the operation a book performs
+constantly. This is the same 13.4 ns figure that Phase 1 recorded as unexplained,
+now with a comparison that makes the size of the gap concrete. It remains open.
+
+The comparison is worth publishing precisely because it does not come out clean.
+Three operations favour the flat design by between 1.7 and 5.4 times, one favours
+the tree by roughly two, and a document that reported only the first three would be
+advertising.
+
+#### Where the ratio comes from
+
+The largest single difference is allocation, and it is counted exactly rather than
+inferred, through the `operator new` replacement in `test/alloc_counter.hpp`,
+measured outside every timed region:
+
+| | Allocations per add |
+| --- | --- |
+| Flat book | **0** |
+| `std::map` book | **2.016** |
+
+That figure decomposes completely, which is why it is worth more here than a
+cache-miss sample would be. Each add allocates one `std::list` node for the
+resting order and one `unordered_map` node for the id index, giving 2. Each of the
+512 levels allocates one `std::map` node on the first add that reaches it, giving
+512 over 32 768 adds, or 0.0156. Predicted total 2.0156 against 2.01599 measured.
+The remaining twelve allocations across the whole run are the id index rehashing
+its bucket array as it grows.
+
+The flat book's zero is not an approximation either. The arena, the level array,
+and the id map are all allocated once at construction, and the add path touches
+none of them again.
+
+#### The working set sweep, run on both
+
+The instrument that stands in for the cache counters no host here provides. Queue
+depth is held at 64 orders per level at every point, so the level count scales with
+the order count and the algorithmic work per add is identical across the whole
+sweep and between both arms. Whatever the curves show is memory behaviour.
+
+| Live orders | Levels | Flat book | `std::map` book | Ratio |
+| --- | --- | --- | --- | --- |
+| 1 024 | 16 | 25.2 ns | 60.3 ns | 2.4x |
+| 4 096 | 64 | 24.5 ns | 62.9 ns | 2.6x |
+| 16 384 | 256 | 27.4 ns | 70.2 ns | 2.6x |
+| 65 536 | 1 024 | 27.7 ns | 91.0 ns | 3.3x |
+
+**The gap widens as the book grows**, from 2.4x to 3.3x, and that is the mechanical
+explanation the ratio needed. The flat book rises 10 percent across a 64-fold
+increase in live orders, because its orders are contiguous in an arena and its
+levels are contiguous in an array. The naive book rises 51 percent across the same
+range, because every order is a separately allocated node reached by pointer, so a
+larger book means a more scattered heap and a worse hit rate on every traversal.
+Allocation explains the constant factor; scattering explains why the factor grows.
+
+An earlier version of this sweep held the level count fixed at 512 instead of
+scaling it, and produced a naive curve that fell as the working set grew. That was
+not a cache effect and was not believable as one. With a fixed level count, a 1 024
+order book creates a new level on half its adds while a 65 536 order book creates
+one on 1 in 128, and a new level is a `std::map` node allocation, so the sweep was
+varying the algorithmic work rather than holding it constant. Recorded because the
+first result was wrong in a way that looked plausible.
+
+#### Reproduction
+
+```bash
+cmake --preset release
+cmake --build --preset release
+./out/build/release/ob_baseline_bench --benchmark_repetitions=9 --benchmark_report_aggregates_only=true
+```
 
 ## Where this design is weak
 

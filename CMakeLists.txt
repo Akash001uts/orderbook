@@ -285,6 +285,23 @@ if(OB_BUILD_BENCH)
 
   target_link_libraries(ob_replay_bench
     PRIVATE ob ob_itch ob_flags ob_bench_flags benchmark::benchmark)
+
+  # The comparative baseline reaches into test/ for two things that already exist
+  # and should not be duplicated: reference_book.hpp, which is the std::map book
+  # the differential test uses as its oracle, and alloc_counter.cpp, which
+  # replaces global operator new so the allocation difference between the two
+  # implementations can be counted exactly rather than asserted.
+  #
+  # Reusing the oracle is the point rather than a shortcut. A baseline written
+  # fresh for the benchmark would be a strawman nobody had checked; this one is
+  # the implementation whose agreement with the engine is what the correctness
+  # argument rests on.
+  add_executable(ob_baseline_bench
+    bench/baseline_bench.cpp
+    test/alloc_counter.cpp)
+
+  target_include_directories(ob_baseline_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test)
+  target_link_libraries(ob_baseline_bench PRIVATE ob ob_flags ob_bench_flags benchmark::benchmark)
 endif()
 
 # ---------------------------------------------------------------------------
