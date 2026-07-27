@@ -30,6 +30,7 @@ than stubbed: this document tracks what exists.
 - [Messages that do not touch the book](#messages-that-do-not-touch-the-book)
 - [Memory mapping rather than reading](#memory-mapping-rather-than-reading)
 - [The synthetic generator, and why it must be semantically valid](#the-synthetic-generator-and-why-it-must-be-semantically-valid)
+- [What a real NASDAQ capture confirmed, and what it revealed](#what-a-real-nasdaq-capture-confirmed-and-what-it-revealed)
 - [Bugs caught by the tests, and what they teach](#bugs-caught-by-the-tests-and-what-they-teach)
 - [Dependency justifications](#dependency-justifications)
 - [Warning flags on an interface target](#warning-flags-on-an-interface-target)
@@ -628,6 +629,57 @@ replayed book is checked against, so validation does not depend on the parser
 agreeing with itself.
 
 The generated book is also never crossed, because a real venue's book cannot be.
+
+## What a real NASDAQ capture confirmed, and what it revealed
+
+The synthetic generator proves the parser is self-consistent and implements the
+specification as written. It cannot prove the written specification and the actual
+feed agree. So a real TotalView-ITCH capture was replayed: NASDAQ's public sample
+for 2019-12-30, 3.5 GB compressed, of which the first 400 MB decompressed was
+surveyed and replayed.
+
+**What held.** Across 11 958 712 real messages the parser reported **zero unknown
+message types**, so the length table covers the entire live feed. Framing was
+exactly as assumed: a two byte big-endian length, then the message, with the symbol
+space-padded at message offset 11. Replaying QQQ, 183 950 messages produced **zero
+unknown order references**, meaning every execution, cancel, delete and replace
+found the order it named, and the reconstructed book closed at 213.18 bid and
+213.20 ask, which is QQQ's real price that day. A byte order error, a field offset
+error, or a scale error does not produce numbers that happen to be right.
+
+**What it revealed: real data contains prices a penny tick cannot express.** Five
+of 92 705 QQQ adds were rejected as off-tick. NASDAQ quotes equities above a dollar
+in pennies, but the price field is in hundredths of a cent and sub-penny prices do
+occur. This is not a defect, it is the tick size being a property of the data rather
+than of the code, and the trade-off is measurable:
+
+| Tick size | Off-tick rejected | Rebases | Cold levels | Best bid / ask |
+| --- | --- | --- | --- | --- |
+| 100, a penny | 5 of 92 705 | 6 | 8 | 213.18 / 213.20 |
+| 1, a hundredth of a cent | 0 | 1232 | 2101 | 213.18 / 213.20 |
+
+A penny tick gives the band a 655 dollar span, so it rebases six times across a
+session and holds almost nothing in cold storage, at the cost of discarding five
+orders. A tick of one accepts every price, but the band spans 6.55 dollars and has
+to chase the market instead of containing it: two hundred times the rebasing and
+two hundred and sixty times the cold levels.
+
+Both configurations agree on the top of book, which is what makes the penny tick
+defensible: the orders it discards are never at the touch. Both are asserted in
+`test_itch.cpp`, so a change in either number is noticed rather than absorbed.
+
+**The counter was too coarse to say any of this.** `add_failures` lumped off-tick
+prices together with band overflow and arena exhaustion. Those call for opposite
+responses, one being a configuration choice and the other meaning liquidity was
+silently lost, so it is now `off_tick_prices` and `rejected_adds`.
+
+**And the synthetic mix was wrong.** Real data is 38.2 percent adds, 30.4 percent
+deletes, and 1.0 percent executions. The generator's defaults produce roughly 11
+percent executions, overstating them by an order of magnitude and understating
+deletes. It also emits no net order imbalance messages at all, which are 9.0 percent
+of the real feed. That matters for Phase 4: a throughput number measured on the
+synthetic mix is not a throughput number for real data, and BENCHMARKS.md now says
+so.
 
 ## Bugs caught by the tests, and what they teach
 

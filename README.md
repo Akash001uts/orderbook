@@ -13,9 +13,9 @@ rather than a smoke test.
 
 ## Status
 
-Phase 3 of 6 complete. The book, the matching engine, and the ITCH 5.0 pipeline are
-built and tested: 90 tests green on GCC and Clang across debug, release,
-relwithdebinfo, and all three sanitizers.
+Phase 3 of 6 complete and validated against a real NASDAQ capture. The book, the
+matching engine, and the ITCH 5.0 pipeline are built and tested: 93 tests green on
+GCC and Clang across debug, release, relwithdebinfo, and all three sanitizers.
 
 | Phase | Scope | State |
 | --- | --- | --- |
@@ -23,6 +23,7 @@ relwithdebinfo, and all three sanitizers.
 | 1 | Flat direct-indexed book, order arena, open-addressing id map, bitmap best price | complete |
 | 2 | Matching engine, order types, differential test against a `std::map` oracle | complete |
 | 3 | ITCH 5.0 zero-copy parser, replay driver, synthetic file generator | complete |
+| 3b | Validated against a real NASDAQ TotalView capture | complete |
 | 4 | Microbenchmarks, HdrHistogram latency harness, `std::map` baseline comparison | not started |
 | 5 | Market maker, queue position estimator, P&L attribution, markouts | not started |
 | 6 | Documentation pass | not started |
@@ -51,6 +52,23 @@ deliberate bugs were injected and each was caught by a different one of its chec
 
 One million commands run on every push, ten million nightly, plus a coverage
 guided libFuzzer target sharing the same comparison code.
+
+### Validated against real market data
+
+Synthetic tests prove the parser is self-consistent. They cannot prove the
+specification and the live feed agree, so a real NASDAQ TotalView-ITCH capture was
+replayed: 2019-12-30, 11 958 712 messages, 8 906 symbols.
+
+| | |
+| --- | --- |
+| Unknown message types | 0, so the length table covers the whole live feed |
+| Unknown order references, QQQ | 0 of 183 950 messages |
+| Reconstructed QQQ close | 213.18 bid / 213.20 ask, the real price that day |
+
+It also found something: five of 92 705 QQQ adds are priced off a penny boundary,
+because ITCH prices are in hundredths of a cent and sub-penny prices occur. The
+trade-off between tick size and band churn is measured in
+[DESIGN.md](DESIGN.md).
 
 ### Measured so far
 
@@ -81,12 +99,19 @@ cmake --build --preset release
 ctest --preset release
 ```
 
-No market data download is needed. `itch_gen` writes real ITCH 5.0 binary, and the
-parser reads it through exactly the same code path as a NASDAQ capture:
+No market data download is needed. A 5.5 MB slice of a real NASDAQ capture is
+committed in `data/`, and `itch_gen` writes synthetic ITCH 5.0 binary that the parser
+reads through exactly the same code path:
 
 ```bash
 ./out/build/release/itch_gen --messages 1000000 --symbol AAPL data/sample.itch
+./out/build/release/itch_replay --symbol QQQ data/qqq_slice.itch
 ```
+
+For a full trading day, `scripts/fetch_nasdaq_sample.sh` downloads one from NASDAQ's
+public archive. They are 3.5 to 4.8 GB compressed, which is why only the slice is
+committed. `itch_replay --survey` reports the message histogram and busiest symbols
+of whatever you point it at.
 
 Presets: `debug`, `release`, `relwithdebinfo`, `asan`, `tsan`, `ubsan`. The three
 sanitizer presets require a Linux or macOS host; the sanitizer runtimes are not
@@ -136,7 +161,9 @@ optimistic model.
 | `strategy/` | Market maker, inventory, P&L |
 | `bench/` | Google Benchmark microbenchmarks and the latency harness |
 | `test/` | Unit, differential, and fuzz tests, plus the reference oracle |
-| `tools/` | Synthetic ITCH file generator |
+| `tools/` | Synthetic ITCH generator and the replay CLI |
+| `data/` | A committed slice of a real NASDAQ capture, see `data/README.md` |
+| `scripts/` | Fetch a full NASDAQ sample day |
 
 ## Design
 

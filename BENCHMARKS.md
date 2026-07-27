@@ -107,6 +107,27 @@ Generated message mix, from `itch_gen --messages 200000`:
 | `Q` cross | 1 824 | 0.9 % |
 | `B` broken | 1 770 | 0.9 % |
 
+### The synthetic mix is not the real mix
+
+Every throughput figure above was measured on a synthetically generated file. A real
+NASDAQ capture has a materially different message distribution, so these numbers do
+not transfer, and Phase 4 measures both.
+
+| Type | Synthetic | Real, 2019-12-30 |
+| --- | --- | --- |
+| `A`/`F` add | 42.9 % | 44.9 % |
+| `D` delete | 21.2 % | 30.4 % |
+| `E`/`C` executed | 11.6 % | 1.1 % |
+| `U` replace | 4.5 % | 7.6 % |
+| `X` cancel | 6.2 % | 4.7 % |
+| `I` net order imbalance | 0 % | 9.0 % |
+
+The generator overstates executions by roughly ten times and emits no imbalance
+messages at all. Executions and cancels are the expensive book operations, so a
+synthetic throughput number is optimistic about how much book work a real feed
+demands and pessimistic about how much pure parsing it demands. Phase 4 reports the
+real capture separately rather than adjusting the synthetic figure.
+
 ### What is not yet explained
 
 The best bid query at 13.4 ns is slower than its instruction count justifies. It

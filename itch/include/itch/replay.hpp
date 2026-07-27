@@ -28,11 +28,23 @@ struct ReplayStats {
   std::uint64_t broken_trades = 0;
   std::uint64_t system_events = 0;
 
-  // An add whose price fell outside the band and the cold cap, or which exhausted
-  // the arena. Reported rather than silently dropped, because a non-zero value
-  // means the book was sized wrong for the data and every downstream number is
-  // suspect.
-  std::uint64_t add_failures = 0;
+  // An add the book refused. Split by cause, because the causes call for entirely
+  // different responses and a single counter cannot tell them apart.
+  //
+  // off_tick means the venue priced an order somewhere the configured tick size
+  // cannot express. That is a statement about the configuration, not a defect: it
+  // is the caller's tick size that is wrong for this data, and the fix is to
+  // configure a finer one.
+  //
+  // rejected means the book ran out of somewhere to put the order, so the band, the
+  // cold cap, or the arena is sized wrong for the data. Any non-zero value here
+  // makes every downstream number suspect, because liquidity was silently lost.
+  std::uint64_t off_tick_prices = 0;
+  std::uint64_t rejected_adds = 0;
+
+  [[nodiscard]] std::uint64_t add_failures() const noexcept {
+    return off_tick_prices + rejected_adds;
+  }
 
   // A reduction or delete naming an order the book does not hold. Real streams
   // produce these legitimately at the start of a file, since the session began
@@ -192,13 +204,13 @@ class ReplayDriver {
     // not a conversion.
     const ob::Price price{static_cast<std::int64_t>(message.u32_at(add_order::PRICE))};
     if (!book_->price_config().on_tick_boundary(price)) {
-      ++stats_.add_failures;
+      ++stats_.off_tick_prices;
       return;
     }
     request.price = book_->price_config().to_ticks(price);
 
     if (book_->add(request) != ob::AddStatus::ok) {
-      ++stats_.add_failures;
+      ++stats_.rejected_adds;
     }
   }
 
@@ -271,13 +283,13 @@ class ReplayDriver {
 
     const ob::Price price{static_cast<std::int64_t>(message.u32_at(order_replace::PRICE))};
     if (!book_->price_config().on_tick_boundary(price)) {
-      ++stats_.add_failures;
+      ++stats_.off_tick_prices;
       return;
     }
     request.price = book_->price_config().to_ticks(price);
 
     if (book_->add(request) != ob::AddStatus::ok) {
-      ++stats_.add_failures;
+      ++stats_.rejected_adds;
     }
   }
 

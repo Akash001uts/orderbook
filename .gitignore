@@ -13,7 +13,9 @@ compile_commands.json
 *.ilk
 perf.data
 perf.data.old
-*.itch
-!data/.gitkeep
+# Market data. The one committed fixture is a 5.5 MB single symbol slice of a real
+# NASDAQ capture; full captures are 3.5 GB and GitHub rejects anything over 100 MB.
 data/*
 !data/.gitkeep
+!data/README.md
+!data/qqq_slice.itch

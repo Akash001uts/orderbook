@@ -295,4 +295,9 @@ if(OB_BUILD_TOOLS)
     tools/itch_gen.cpp)
 
   target_link_libraries(itch_gen PRIVATE ob_itch ob_flags)
+
+  add_executable(itch_replay
+    tools/itch_replay.cpp)
+
+  target_link_libraries(itch_replay PRIVATE ob_itch ob_flags)
 endif()

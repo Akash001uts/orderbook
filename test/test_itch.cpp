@@ -5,6 +5,7 @@
 #include <iostream>
 #include <map>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -386,7 +387,7 @@ TEST(ItchReplay, AddsBuildTheBook) {
   EXPECT_EQ(book->best_bid(), ob::Ticks{-2});
   EXPECT_EQ(book->best_ask(), ob::Ticks{3});
   EXPECT_EQ(book->total_qty_at(ob::Side::buy, ob::Ticks{-2}), ob::Quantity{300});
-  EXPECT_EQ(driver.stats().add_failures, 0U);
+  EXPECT_EQ(driver.stats().add_failures(), 0U);
 }
 
 TEST(ItchReplay, ExecutionReducesAndRemovesAtZero) {
@@ -579,7 +580,7 @@ TEST(ItchReplay, FinalBookMatchesTheGeneratorsIndependentExpectation) {
   // against that rather than against the parser's own reading of the file, so the
   // parser cannot agree with itself and call that a pass.
   EXPECT_EQ(book->pool().live_count(), generator.summary().expected_live_orders);
-  EXPECT_EQ(driver.stats().add_failures, 0U)
+  EXPECT_EQ(driver.stats().add_failures(), 0U)
       << "the book was sized wrong for this data, so nothing downstream is meaningful";
   EXPECT_EQ(driver.stats().unknown_order_references, 0U)
       << "the generator only references live orders, so any of these is a replay bug";
@@ -679,6 +680,167 @@ TEST(ItchMappedFile, ReportsAMissingFileRatherThanThrowing) {
   EXPECT_FALSE(mapped.open("this_path_does_not_exist_ob_itch.itch"));
   EXPECT_FALSE(mapped.error().empty());
   EXPECT_FALSE(mapped.is_open());
+}
+
+// ---------------------------------------------------------------------------
+// Real market data.
+//
+// Everything above this point runs against files this project generated for itself.
+// That proves the parser is self-consistent and that it implements the
+// specification as written. It cannot prove the written specification and the
+// actual NASDAQ feed agree, and in an exchange protocol those two things diverge in
+// small ways that only real bytes reveal.
+//
+// The fixture is a single symbol slice of a real TotalView-ITCH capture, committed
+// at 5.5 MB because the full day is 3.5 GB. See data/README.md for provenance. The
+// expected values below were taken from replaying the full capture, and the slice
+// reproduces them exactly, which is what makes the slice a valid stand-in.
+// ---------------------------------------------------------------------------
+
+// Real prices for a real symbol on a real date. QQQ closed 2019-12-30 around 213
+// dollars, and ITCH prices carry four implied decimals, so these are 213.18 and
+// 213.20. A parser with a byte order bug, a field offset bug, or a scale bug does
+// not produce numbers that happen to be right.
+constexpr std::int64_t QQQ_EXPECTED_BID = 2131800;
+constexpr std::int64_t QQQ_EXPECTED_ASK = 2132000;
+
+[[nodiscard]] std::filesystem::path real_capture_path() {
+  return std::filesystem::path(OB_TEST_SOURCE_DIR).parent_path() / "data" / "qqq_slice.itch";
+}
+
+TEST(ItchRealCapture, ReplaysASliceOfRealNasdaqData) {
+  const std::filesystem::path path = real_capture_path();
+  if (!std::filesystem::exists(path)) {
+    GTEST_SKIP() << "no real capture fixture at " << path.string();
+  }
+
+  MappedFile mapped;
+  ASSERT_TRUE(mapped.open(path.string())) << mapped.error();
+
+  // A penny tick, which is what NASDAQ quotes equities above a dollar in. The band
+  // then spans 655 dollars, comfortably more than any single day's range.
+  //
+  // The full 65536 level band rather than the 4096 the synthetic tests use, because
+  // real prices are absolute. base_price is zero, so QQQ at 213 dollars sits at tick
+  // 21318, and a narrow band would spend the whole replay chasing it.
+  using WideBook = ob::Book<ob::DEFAULT_BAND_LEVELS>;
+  WideBook::Config config;
+  config.price = ob::PriceConfig{.tick_size = 100, .price_scale = PRICE_SCALE, .base_price = 0};
+  config.arena_capacity = 1U << 17;
+  config.max_cold_levels_per_side = 4096;
+  config.initial_center = ob::Ticks{0};
+
+  const std::unique_ptr<WideBook> book = std::make_unique<WideBook>(config);
+  ReplayDriver<ob::DEFAULT_BAND_LEVELS> driver(*book, "QQQ");
+
+  const ParseResult result = replay_buffer(mapped.bytes(), driver);
+
+  EXPECT_EQ(result.status, ParseStatus::ok) << "the committed slice should be complete";
+  EXPECT_EQ(result.messages, 183954U);
+  EXPECT_EQ(result.unknown_types, 0U)
+      << "every message type in the real feed should be one the length table knows";
+
+  const ReplayStats& stats = driver.stats();
+
+  EXPECT_TRUE(driver.symbol_resolved());
+  EXPECT_EQ(driver.resolved_locate(), 6556U) << "QQQ's stock locate code on this date";
+  EXPECT_EQ(stats.messages_applied, 183950U);
+
+  // The message counts from the real feed. Wrong field offsets would shift these.
+  EXPECT_EQ(stats.adds, 92705U);
+  EXPECT_EQ(stats.executions, 987U);
+  EXPECT_EQ(stats.cancels, 1062U);
+  EXPECT_EQ(stats.deletes, 84481U);
+  EXPECT_EQ(stats.replaces, 4487U);
+
+  // Zero unknown order references across 90 000 reductions and deletes is the
+  // strongest single signal that the replay semantics are right: every execution,
+  // cancel, delete and replace found the order it named.
+  EXPECT_EQ(stats.unknown_order_references, 0U);
+
+  // No rejections, so the book was sized correctly for real data.
+  EXPECT_EQ(stats.rejected_adds, 0U);
+
+  // Five orders in this slice are priced off a penny boundary. Real NASDAQ data
+  // contains sub-penny prices, and a penny tick cannot express them. That is a
+  // property of the tick size chosen here rather than a defect, and it is asserted
+  // rather than tolerated so that a change in the number is noticed. Replaying the
+  // same slice with a tick size of 1 accepts all five, at the cost of a band that
+  // spans 6.55 dollars instead of 655 and rebases two hundred times more often.
+  EXPECT_EQ(stats.off_tick_prices, 5U);
+
+  // The payoff assertion: real prices for a real symbol on a real date.
+  //
+  // Bound to locals rather than re-queried. Each call returns a fresh optional, so
+  // asserting on one and dereferencing another says nothing about the one being
+  // dereferenced, and clang-tidy is right to object.
+  const std::optional<ob::Ticks> bid = book->best_bid();
+  const std::optional<ob::Ticks> ask = book->best_ask();
+  if (!bid.has_value() || !ask.has_value()) {
+    FAIL() << "a replayed real book must have both a bid and an ask";
+  }
+
+  EXPECT_EQ(book->price_config().to_price(*bid).raw(), QQQ_EXPECTED_BID);
+  EXPECT_EQ(book->price_config().to_price(*ask).raw(), QQQ_EXPECTED_ASK);
+  EXPECT_LT(*bid, *ask) << "a real book is never crossed";
+
+  EXPECT_EQ(book->pool().live_count(), 7665U);
+
+  std::cout << "real capture: " << result.messages << " messages, " << stats.messages_applied
+            << " applied to QQQ, final book " << book->price_config().to_price(*bid).raw() << " / "
+            << book->price_config().to_price(*ask).raw() << ", " << book->pool().live_count()
+            << " orders resting, " << book->rebase_count() << " rebases, "
+            << book->cold_level_count() << " cold levels\n";
+}
+
+// The same slice at a finer tick, which is the other half of the trade-off. Both
+// configurations agree on the top of book, which is what makes dropping the
+// sub-penny orders acceptable at a penny tick.
+TEST(ItchRealCapture, AFinerTickAcceptsEverySubPennyPriceAtTheCostOfBandChurn) {
+  const std::filesystem::path path = real_capture_path();
+  if (!std::filesystem::exists(path)) {
+    GTEST_SKIP() << "no real capture fixture at " << path.string();
+  }
+
+  MappedFile mapped;
+  ASSERT_TRUE(mapped.open(path.string())) << mapped.error();
+
+  using WideBook = ob::Book<ob::DEFAULT_BAND_LEVELS>;
+  WideBook::Config config;
+  config.price = ob::PriceConfig{.tick_size = 1, .price_scale = PRICE_SCALE, .base_price = 0};
+  config.arena_capacity = 1U << 17;
+  config.max_cold_levels_per_side = 8192;
+  config.initial_center = ob::Ticks{0};
+
+  const std::unique_ptr<WideBook> book = std::make_unique<WideBook>(config);
+  ReplayDriver<ob::DEFAULT_BAND_LEVELS> driver(*book, "QQQ");
+
+  ASSERT_EQ(replay_buffer(mapped.bytes(), driver).status, ParseStatus::ok);
+
+  // Every price is now expressible, so nothing is dropped.
+  EXPECT_EQ(driver.stats().off_tick_prices, 0U);
+  EXPECT_EQ(driver.stats().rejected_adds, 0U);
+  EXPECT_EQ(driver.stats().unknown_order_references, 0U);
+
+  // And the top of book is unchanged, which is the point: the five orders a penny
+  // tick discards are never at the touch.
+  const std::optional<ob::Ticks> bid = book->best_bid();
+  const std::optional<ob::Ticks> ask = book->best_ask();
+  if (!bid.has_value() || !ask.has_value()) {
+    FAIL() << "a replayed real book must have both a bid and an ask";
+  }
+
+  EXPECT_EQ(book->price_config().to_price(*bid).raw(), QQQ_EXPECTED_BID);
+  EXPECT_EQ(book->price_config().to_price(*ask).raw(), QQQ_EXPECTED_ASK);
+
+  // The cost. A band of 65536 ticks spans 6.55 dollars at this tick size rather
+  // than 655, so it has to chase the market instead of containing it.
+  EXPECT_GT(book->rebase_count(), 100U) << "a narrow band must rebase far more often";
+  EXPECT_GT(book->cold_level_count(), 100U);
+
+  std::cout << "real capture at tick 1: " << book->rebase_count() << " rebases, "
+            << book->cold_level_count() << " cold levels, " << book->pool().live_count()
+            << " orders resting\n";
 }
 
 TEST(ItchGenerator, IsDeterministicForAGivenSeed) {
