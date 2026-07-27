@@ -171,9 +171,32 @@ is the number that matters in this domain.
 
 **Comparative baseline**: the naive `std::map<Price, std::list<Order>>` reference
 book from `test/reference_book.hpp` measured on the identical workload, with both
-numbers published. The speedup ratio is only meaningful alongside a mechanical
-explanation, so `perf stat` counters accompany it: cycles, instructions, IPC, cache
-references, cache misses, and branch misses for both implementations.
+numbers published.
+
+The speedup ratio is only meaningful alongside a mechanical explanation, and that
+explanation has to be built from instruments this project can actually read.
+`perf stat` counters are available on none of the hosts it runs on: Windows has no
+equivalent, WSL2 is a hypervisor guest that does not expose the PMU, and
+GitHub-hosted runners do not expose it either. Three substitutes carry the
+explanation instead.
+
+| Instrument | What it explains | How it is measured |
+| --- | --- | --- |
+| Allocation counts | Node allocation, the largest single structural difference between the two implementations | The `operator new` replacement in `test/alloc_counter.hpp`, already built to assert that the hot path does not allocate |
+| Working set sweep | Memory behaviour, which is what the absent cache counters would have shown | The Phase 1 technique run on both implementations: hold the algorithmic work constant, vary the book size, and read the divergence between the two curves |
+| Pointer hops per operation | Why the sweep curves separate where they do | Counted structurally from the code, stated per operation, then checked against the sweep |
+
+The allocation instrument is exact rather than sampled, which is worth more here
+than a cache miss count. The reference book allocates a `std::map` node for every
+newly occupied level, a `std::list` node for every resting order, and an
+`unordered_map` node for every live order id. The flat book allocates nothing at
+all once constructed. That difference is countable rather than inferred, it is
+already asserted on in the test suite, and it accounts for more of the ratio than
+any single cache statistic would.
+
+`perf stat` counters remain the better artifact and are not a blocker. If a
+bare-metal Linux machine becomes available, they are added alongside these three
+rather than in place of them.
 
 ### Timing methodology
 

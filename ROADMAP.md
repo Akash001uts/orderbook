@@ -95,7 +95,10 @@ synthetic number as a proxy for real throughput.
 - **`std::map` baseline comparison.** Blocked on `test/reference_book.hpp`, which
   Phase 2 creates, and on the latency harness. Publish both implementations'
   numbers on an identical workload, with the speedup ratio explained rather than
-  just stated.
+  just stated. What does the explaining is settled and written down in
+  BENCHMARKS.md: allocation counts from the existing `operator new` replacement, a
+  working set sweep run on both implementations, and a structural pointer hop count
+  per operation. Not `perf stat`, which no host here can read.
 - **Resolve the best-price query cost.** Phase 1 measured 13.4 ns for
   `best_bid()`, which is slower than three dependent loads into 8 KiB of resident
   structure plus three bit instructions should cost. Candidates are the
