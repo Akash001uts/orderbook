@@ -45,13 +45,11 @@ release is the complete dataset behind every finding in DESIGN.md.
 
 ### Why not commit it, and why compressing harder does not help
 
-Git rejects any file over 100 MB at push time. That limit is not negotiable by
-compressing better, and the numbers were measured on this data rather than assumed:
-
-Measured on a 300 MB sample of the real multi-symbol stream, which is the figure
-that matters. An earlier estimate extrapolated from the single symbol slice and came
-out too optimistic, because one symbol's traffic is far more repetitive than the
-whole feed:
+Git rejects any file over 100 MB at push time, and that limit is not negotiable by
+compressing better. The ratios below were measured on a 300 MB sample of the real
+multi-symbol stream, which is the figure that matters: an earlier estimate
+extrapolated from the single symbol slice and came out too optimistic, because one
+symbol's traffic is far more repetitive than the whole feed.
 
 | | Ratio on real multi-symbol ITCH |
 | --- | --- |
@@ -64,7 +62,7 @@ over the 100 MB per-file limit. Git LFS does not close it either: the free tier 
 1 GB of storage and 1 GB of monthly bandwidth.
 
 Splitting the archive into sub-100 MB chunks would technically pass the check and
-is the wrong answer anyway. It would put 2.5 GB into the git history permanently,
+is the wrong answer anyway. It would put 2 GB into the git history permanently,
 so every clone of a source repository would drag it down forever, and GitHub's own
 guidance is explicit that repositories are not for bulk data.
 
