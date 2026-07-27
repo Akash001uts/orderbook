@@ -79,15 +79,16 @@ Complete. One item deliberately not built:
 
 ### Phase 3, ITCH 5.0 pipeline
 
-Complete. One item deferred:
+Complete, including validation against a real NASDAQ TotalView capture. Nothing
+deferred.
 
-- **Validation against a real NASDAQ capture.** Every test runs against synthetic
-  files, which the parser reads through the identical code path. That proves the
-  code is self-consistent and that it implements the specification as written, but
-  it cannot catch a place where the specification and the real feed disagree, and
-  those places exist in any exchange protocol. Downloading a TotalView sample and
-  replaying one symbol from it is the remaining check, and it needs no new code:
-  `MappedFile` plus `ReplayDriver` already handle it. Worth doing before Phase 6.
+One new item for Phase 6, from what the real capture revealed: the synthetic
+generator's message mix differs materially from the real feed, overstating executions
+by roughly ten times and emitting no imbalance messages. Bringing the defaults closer
+to observed proportions would make every synthetic benchmark more representative. It
+is not urgent, because Phase 4 measures the real capture separately rather than
+relying on the synthetic figure, but it is worth doing before anyone quotes a
+synthetic number as a proxy for real throughput.
 
 ### Phase 4, benchmark harness
 
