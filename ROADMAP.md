@@ -102,13 +102,16 @@ synthetic number as a proxy for real throughput.
   paths, to return something cheaper than `std::optional`, or to accept the cost
   and say so. This needs a decision in the DESIGN.md decision/alternatives/cost
   format, not another benchmark.
-- **HdrHistogram dependency.** Not fetched yet, deliberately. An unused dependency
-  is still a dependency someone has to build. It arrives with the latency harness.
-- **The measurement discipline itself**, which is the part of Phase 4 that is not
-  a benchmark: core pinning through `sched_setaffinity`, configurable warmup, turbo
-  and frequency-scaling detection, full environment capture, and run-to-run
-  variance reported rather than a cherry-picked run. The microbenchmark set is
-  complete without it, but no number from that set is quotable until this lands.
+Phase 4 is otherwise complete: the microbenchmark set, the `std::map` baseline,
+the HdrHistogram latency harness, and the measurement discipline all landed.
+
+- **An isolated core, which no host here can provide.** Pinning is implemented and
+  verified on both platforms, but pinning is not isolation. Windows has no
+  `isolcpus` equivalent and WSL2 is a guest, so the OS can still schedule other
+  work onto the pinned core. The consequence is bounded and stated wherever it
+  matters: percentiles up to p99.99 are sound, maximum values are not. Closing
+  this needs bare-metal Linux booted with `isolcpus` and `nohz_full`, which is the
+  same machine that would close the `perf stat` gap above.
 
 ### Phase 6, documentation
 

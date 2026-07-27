@@ -1,10 +1,19 @@
 # Benchmarks
 
-**The headline results in this document are not yet trustworthy.** The disciplined
-harness lands in Phase 4. What is published below is a first look from Phase 1,
-labelled with everything wrong with it, plus the methodology Phase 4 will
-implement, recorded before that measurement is taken so the method cannot be chosen
+**Read the conditions before the numbers.** This document is organised so that is
+possible: the Phase 1 first look comes first, labelled with everything wrong with
+it, then the Phase 4 methodology exactly as it was written down before any of it
+was measured, then the Phase 4 results.
+
+That ordering is deliberate and worth keeping. The method was committed to the
+repository before the measurements existed, so it could not be chosen
 retroactively to suit a result.
+
+**One caveat applies to everything here**: no isolated core was available on any
+host this project can reach. Pinning is implemented and verified working on both
+Windows and Linux, but pinning is not isolation. Comparative ratios and percentiles
+up to p99.99 are sound. Maximum values are not, and are labelled as such wherever
+they appear.
 
 An unmeasured performance claim is worthless, and a measured claim without its
 methodology is not much better. Both the numbers and the conditions that produced
@@ -172,11 +181,12 @@ cmake --build --preset release
 | aggressive order crossing ten levels | Level walking and repeated bitmap clears |
 | best price query | The bitmap `countr_zero` path in isolation |
 
-**End-to-end replay latency**: per message latency across a full ITCH replay,
-recorded into an HdrHistogram and reported as p50, p90, p99, p99.9, p99.99, and
-max in nanoseconds, broken out by message type, plus throughput in messages per
-second. Averages will not be reported alone. A mean hides the tail, and the tail
-is the number that matters in this domain.
+**End-to-end replay latency**, now measured, results under "End to end replay
+latency" below: per message latency across a full ITCH replay, recorded into an
+HdrHistogram and reported as p50, p90, p99, p99.9, p99.99, and max in nanoseconds,
+broken out by message type, plus throughput in messages per second. Averages will
+not be reported alone. A mean hides the tail, and the tail is the number that
+matters in this domain.
 
 **Comparative baseline**, now measured, results under "The comparative baseline
 against `std::map`" below: the naive `std::map<Price, std::list<Order>>` reference
@@ -208,49 +218,65 @@ any single cache statistic would.
 bare-metal Linux machine becomes available, they are added alongside these three
 rather than in place of them.
 
-### Timing methodology
+### Timing methodology, built in `bench/harness.hpp`
 
 `rdtscp` with a TSC frequency calibrated at startup against
 `std::chrono::steady_clock`, with a documented fallback to `steady_clock` where the
 TSC is unusable. TSC invariance is verified via `CPUID` leaf `0x80000007` bit 8,
 and the harness fails loudly rather than silently reporting numbers derived from a
 counter that changes rate with frequency. `rdtscp` is used rather than `rdtsc`
-because it orders against prior loads, and the measured region is fenced so the
-timestamp is not reordered into or out of it.
+because it does not begin until prior instructions have retired, so it cannot float
+above the measured region; an `lfence` on the other side of each read closes the
+opposite direction.
 
-### Environment discipline
+Calibration takes seven 20 ms trials and uses the median, so a single scheduling
+interruption during startup cannot skew every later number. It busy waits rather
+than sleeping, because a sleep can return late by an unbounded amount and would
+understate the tick rate.
 
-Every published result will carry the conditions that produced it:
+### Environment discipline, built in `bench/harness.cpp`
 
-- Thread pinned to an isolated core via `sched_setaffinity`. Recommended boot
-  flags for a quiet core are documented alongside the results.
-- A configurable warmup, run before recording starts, so that the arena is faulted
-  in, the caches are warm, and no measurement includes a first-touch page fault.
-- Turbo boost and frequency scaling detected and reported. If either is active,
-  the result is printed with a warning rather than suppressed.
-- CPU model, cache sizes at each level, compiler and version, exact compile flags,
-  kernel version, and hugepage configuration printed with every result.
-- Each configuration run multiple times, with run-to-run variance reported. A
+Every result carries the conditions that produced it, printed by the program:
+
+- Thread pinned through `sched_setaffinity` on POSIX and `SetThreadAffinityMask`
+  on Windows. The Windows path is reported as the weaker guarantee it is: it stops
+  migration but cannot stop other work sharing the core, because there is no
+  `isolcpus` equivalent. Recommended boot flags for a genuinely quiet core are
+  named in the pinning message itself.
+- A configurable warmup, run before recording starts, so the caches are warm and
+  the allocator has already faulted in pages of the size the measured runs ask
+  for.
+- Frequency scaling read from `intel_pstate/no_turbo` or `cpufreq/boost` where
+  those exist, reported as unknown where they do not, and counted as a warning
+  either way unless turbo is confirmed disabled.
+- CPU brand from `CPUID`, hardware thread count, OS, compiler and version, build
+  type, and the exact compile flags, which the build system hands to the code as a
+  define so the printed flags cannot drift from the real ones.
+- Every configuration run multiple times with run-to-run variance reported. A
   single run is a sample of one and the spread is part of the result.
 
-### Reproduction command
+**The rule throughout is to fail loudly.** A harness that quietly falls back to a
+worse clock, or quietly fails to pin, and then prints a confident number is worse
+than one that refuses to run, because the number outlives the caveat. Every
+degraded condition is both recorded in the environment block and counted into a
+warning total printed with the results.
 
-The exact command will be recorded here alongside the results table, so that a
-reader can rerun it rather than trust it.
+## Phase 4 results
 
-## Phase 4 results so far, the corrected comparisons
+Phase 4 is complete. The nine case microbenchmark set, the `std::map` comparative
+baseline, the HdrHistogram latency harness, and the measurement discipline all
+exist and all ran.
 
-The nine case microbenchmark set is complete. The measurement discipline around it
-is not: core pinning, warmup, turbo detection, and environment capture are still
-ahead in this phase. **Every caveat from the Phase 1 first look still applies to
-the absolute numbers below**, and they are published as comparisons rather than as
-figures precisely because the comparisons survive the noise that the absolute
-values do not.
+One caveat survives everything and is not fixable on this hardware: **there is no
+isolated core available**, on Windows or under WSL2. Pinning is implemented and
+works, but pinning is not isolation. Ratios and percentiles up to p99.99 are sound;
+`max` columns are not.
 
-Conditions are the same machine and toolchain as the Phase 1 table above, GCC
-16.1.0 at `-O3 -march=native`, Google Benchmark, 15 repetitions, 0.6 s minimum per
-repetition, median reported, with the run-to-run coefficient of variation next to
-each figure so the reader can see which rows are solid.
+The microbenchmark figures below predate the harness and were taken through Google
+Benchmark rather than through `bench/harness.hpp`, on the same machine and
+toolchain as the Phase 1 table, GCC 16.1.0 at `-O3 -march=native`, 15 repetitions,
+0.6 s minimum per repetition, median reported, with the run-to-run coefficient of
+variation next to each figure so the reader can see which rows are solid.
 
 ### The occupancy bitmap transition, now measured correctly
 
@@ -400,6 +426,110 @@ first result was wrong in a way that looked plausible.
 cmake --preset release
 cmake --build --preset release
 ./out/build/release/ob_baseline_bench --benchmark_repetitions=9 --benchmark_report_aggregates_only=true
+```
+
+### End to end replay latency
+
+`ob_latency_bench` replays a real ITCH capture and times every message
+individually, recording into an HdrHistogram. This is the distribution the phase
+was built to produce, and it is reported as percentiles because a mean hides the
+tail and the tail is the number that matters here.
+
+Conditions, all captured by the program itself and printed with every run:
+
+| | |
+| --- | --- |
+| Clock | invariant TSC, CPUID leaf `0x80000007` bit 8 verified set, calibrated to 3.11039 ticks/ns against `steady_clock` |
+| Core | pinned to cpu 2 through `SetThreadAffinityMask` |
+| Arena | 131 072 slots, 5 MiB |
+| Warmup | 2 unrecorded replays, then 5 measured |
+| Input | `data/qqq_slice.itch`, 183 954 QQQ messages per run |
+| Toolchain | GCC 16.1.0, `-O3` |
+
+| Message type | count | p50 | p90 | p99 | p99.9 | p99.99 | mean |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| add order (A/F) | 463 525 | 42 | 126 | 165 | 262 | 5 147 | 61.2 |
+| executed (E/C) | 4 935 | 45 | 60 | 104 | 189 | 399 | 47.9 |
+| cancel (X) | 5 310 | 40 | 51 | 65 | 165 | 177 | 42.4 |
+| delete (D) | 422 405 | 37 | 49 | 63 | 117 | 244 | 39.4 |
+| replace (U) | 22 435 | 62 | 145 | 189 | 288 | 430 | 75.9 |
+| trade (P/Q/B) | 300 | 32 | 41 | 46 | 48 | 48 | 34.0 |
+| system/directory | 20 | 38 | 186 | 737 | 737 | 737 | 113.5 |
+| parsed, discarded | 840 | 31 | 32 | 46 | 183 | 263 | 31.0 |
+| **all** | **919 770** | **41** | **79** | **158** | **227** | **549** | **51.3** |
+
+Nanoseconds, three significant figures across a 1 ns to 1 s range.
+
+**Every figure includes 26.68 ns of timer overhead**, measured by the harness as
+the median of 4 096 back to back timestamp reads and printed next to the results.
+It is deliberately not subtracted: removing a noisy per sample estimate would
+corrupt the tail, which is the part worth reading. Subtract it mentally when
+comparing against a microbenchmark, which puts a delete at roughly 11 ns and an
+add at roughly 15 ns of actual work.
+
+The shape is what the design predicts. Deletes and cancels are the cheapest
+mutations, an add costs more because it allocates a slot and may occupy a level,
+and a replace is the most expensive because it is a delete and an add in one
+message. The `p99.99` column for adds at 5 147 ns is the band rebase becoming
+visible, which BENCHMARKS.md predicted before it was measured.
+
+#### Latency and throughput cannot be measured in the same pass
+
+The harness runs them separately, and the reason is quantitative rather than
+stylistic. Two timestamp reads plus two fences cost about 27 ns against a message
+that costs about 25 ns, so instrumenting every message more than doubles the work.
+
+| | Messages per second |
+| --- | --- |
+| Measured inside the instrumented loop | 10.9 M |
+| Measured on separate uninstrumented runs | **37.8 M**, run to run CV 5.99 % |
+
+A throughput number taken from the instrumented loop understates the engine by
+3.5 times. It would also have been the easiest possible number to publish by
+accident, since it falls out of the same run that produces the percentiles.
+
+#### The same code on Linux, as a cross check
+
+The harness was built and run under WSL2 with GCC 13.3.0, pinning through
+`sched_setaffinity` instead of `SetThreadAffinityMask`. This exercises a different
+compiler, a different OS, and the POSIX branches of both the memory mapping and
+the pinning code.
+
+| | Windows, GCC 16.1.0 | Linux, GCC 13.3.0 |
+| --- | --- | --- |
+| TSC calibration | 3.11039 ticks/ns | 3.11038 ticks/ns |
+| add p50 | 42 | 46 |
+| delete p50 | 37 | 38 |
+| replace p50 | 62 | 65 |
+| all p50 | 41 | 41 |
+| all p99 | 158 | 173 |
+| Throughput | 37.8 M msg/s | 48.2 M msg/s |
+
+Two independently calibrated TSC frequencies agreeing to five digits, and
+percentiles agreeing within a few nanoseconds across two compilers and two
+operating systems, is the evidence that the measurement itself is sound rather
+than an artifact of one toolchain. The throughput gap is the one real difference
+and it is not investigated here.
+
+#### What is still wrong with these numbers
+
+The harness reports its own degraded conditions rather than hiding them, and on
+this host there is one that it cannot fix:
+
+- **No core isolation.** Pinning stops the thread migrating between performance
+  and efficiency cores. It does not stop the OS scheduling other work onto the
+  same core, because Windows has no `isolcpus` equivalent and WSL2 is a guest.
+  **This makes the `max` column meaningless**: a 171 775 ns maximum is a
+  scheduling event, not a property of the book. `p99.9` and `p99.99` are the tail
+  figures worth reading until a machine with an isolated core is available.
+- **Frequency scaling is unknown.** Not readable on Windows, and not exposed under
+  WSL2 either, so it is reported as unknown and counted as a warning rather than
+  quietly passed over.
+
+#### Reproduction
+
+```bash
+./out/build/release/ob_latency_bench --file data/qqq_slice.itch --symbol QQQ --cpu 2 --warmup 2 --runs 5
 ```
 
 ## Where this design is weak

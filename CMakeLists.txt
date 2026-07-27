@@ -176,6 +176,41 @@ if(OB_BUILD_BENCH)
       endif()
     endforeach()
   endif()
+
+  # HdrHistogram, for the latency harness only.
+  #
+  # Justification, per the rule above that every dependency needs one. Latency in
+  # this domain is a tail question, and the tail is where a naive histogram is
+  # worst: fixed width buckets either lose all resolution at the top of the range
+  # or need absurd memory to keep it. HdrHistogram records across a wide dynamic
+  # range at a constant relative precision, which is exactly the shape of the
+  # problem, and it is the reference implementation of that idea rather than
+  # something written here and unvalidated.
+  #
+  # Deliberately not fetched until now. An unused dependency is still a dependency
+  # someone has to build, so it arrives with the harness that needs it.
+  #
+  # The log writer is disabled because it is the only part that needs zlib, and
+  # nothing here writes histogram logs. Programs and the shared library are off for
+  # the same reason: this build needs the static core and nothing else.
+  #
+  # GIT_SUBMODULES "" because the only submodule it declares is its own vendored
+  # copy of Google Benchmark, used by its test suite. This build does not run that
+  # suite, and cloning a second Google Benchmark on every fresh CI configure is
+  # pure cost.
+  FetchContent_Declare(hdr_histogram
+    GIT_REPOSITORY https://github.com/HdrHistogram/HdrHistogram_c.git
+    GIT_TAG 0.11.8
+    GIT_SHALLOW TRUE
+    GIT_SUBMODULES ""
+    SYSTEM
+    EXCLUDE_FROM_ALL)
+  set(HDR_HISTOGRAM_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+  set(HDR_HISTOGRAM_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+  set(HDR_HISTOGRAM_INSTALL_SHARED OFF CACHE BOOL "" FORCE)
+  set(HDR_HISTOGRAM_INSTALL_STATIC OFF CACHE BOOL "" FORCE)
+  set(HDR_LOG_REQUIRED OFF CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(hdr_histogram)
 endif()
 
 # Force the fetched dependencies' interface includes to be treated as system
@@ -201,7 +236,7 @@ function(ob_mark_dependency_system target_name)
   endif()
 endfunction()
 
-foreach(dep_target gtest gtest_main benchmark benchmark_main)
+foreach(dep_target gtest gtest_main benchmark benchmark_main hdr_histogram_static)
   ob_mark_dependency_system(${dep_target})
 endforeach()
 
@@ -302,6 +337,33 @@ if(OB_BUILD_BENCH)
 
   target_include_directories(ob_baseline_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test)
   target_link_libraries(ob_baseline_bench PRIVATE ob ob_flags ob_bench_flags benchmark::benchmark)
+
+  # The measurement discipline: TSC timing with a verified invariance bit, core
+  # pinning, turbo detection, and environment capture. Shared by anything that
+  # publishes a number, and separate from any one benchmark because the
+  # methodology is the phase's deliverable rather than a detail of one target.
+  add_library(ob_bench_harness STATIC
+    bench/harness.cpp)
+
+  target_include_directories(ob_bench_harness PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/bench)
+  target_link_libraries(ob_bench_harness PRIVATE ob_flags)
+
+  # The environment block prints the flags a result was built with, which means
+  # the build has to hand them to the code. Doing it any other way invites the
+  # printed flags and the real ones to drift apart.
+  string(TOUPPER "${CMAKE_BUILD_TYPE}" ob_build_type_upper)
+  target_compile_definitions(ob_bench_harness PRIVATE
+    OB_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
+    OB_BUILD_FLAGS="${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${ob_build_type_upper}}")
+
+  # The latency harness is a program rather than a Google Benchmark target. It
+  # replays a real capture once per run and reports a distribution, which is not
+  # what a repetition-driven microbenchmark framework is for.
+  add_executable(ob_latency_bench
+    bench/latency_bench.cpp)
+
+  target_link_libraries(ob_latency_bench
+    PRIVATE ob ob_itch ob_flags ob_bench_harness hdr_histogram_static)
 endif()
 
 # ---------------------------------------------------------------------------
