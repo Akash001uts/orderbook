@@ -13,11 +13,12 @@ rather than a smoke test.
 
 ## Status
 
-Phase 5 of 6 complete. The book, the matching engine, the ITCH 5.0 pipeline, the
-benchmark harness, and the market making strategy layer are built and tested: 116
-tests green on GCC and Clang across debug, release, relwithdebinfo, and all three
-sanitizers, with 14 CI jobs covering both compilers, every preset, all three
-sanitizers, clang-tidy, clang-format, the differential test, and a libFuzzer run.
+All six phases complete. The book, the matching engine, the ITCH 5.0 pipeline, the
+benchmark harness, the market making strategy layer, and the documentation are
+built and tested: 122 tests green on GCC and Clang across debug, release,
+relwithdebinfo, and all three sanitizers, with 14 CI jobs covering both compilers,
+every preset, all three sanitizers, clang-tidy, clang-format, the differential
+test, and a libFuzzer run. The repository is private.
 
 | Phase | Scope | State |
 | --- | --- | --- |
@@ -28,7 +29,7 @@ sanitizers, clang-tidy, clang-format, the differential test, and a libFuzzer run
 | 3b | Validated against a real NASDAQ TotalView capture | complete |
 | 4 | Microbenchmarks, HdrHistogram latency harness, `std::map` baseline comparison | complete |
 | 5 | Market maker, queue position estimator, P&L attribution, markouts | complete |
-| 6 | Documentation pass | not started |
+| 6 | Documentation pass | complete |
 
 Nothing is claimed here that has not been measured, and the one condition that
 could not be met on any available host, an isolated core, is named wherever it
@@ -90,11 +91,15 @@ process under the same conditions, so the ratio is the durable part:
 | Add | 26.9 ns | 73.5 ns | 2.7x faster |
 | Cancel | 10.3 ns | 56.0 ns | 5.4x faster |
 | Match, one level consumed | 38.7 ns | 65.2 ns | 1.7x faster |
-| Best bid query | 10.2 ns | 5.38 ns | **1.9x slower** |
+| Best bid query | **0.27 ns** | 4.48 ns | below the harness noise floor |
 
-The last row is the one worth reading. A tree caches its extreme element as a
-pointer, and the bitmap's three dependent loads cannot beat one dereference. It is
-reported because a comparison that only went one way would be advertising.
+The last row has a history worth knowing. The flat book originally **lost** this
+query, 10.2 ns against the tree's 5.38 ns, because `std::map` caches its extreme
+element while a bitmap descent is three dependent loads. That was reported rather
+than buried, and then fixed by caching the final answer and repairing it lazily.
+The 0.27 ns is only 0.09 ns above an empty loop, so the accurate claim is that the
+query is below what the harness can resolve rather than that it costs 0.27 ns; a
+dedicated noise-floor benchmark exists to make that distinction checkable.
 
 The mechanism behind the ratio is counted rather than inferred, because no
 available host exposes hardware performance counters: the flat book allocates

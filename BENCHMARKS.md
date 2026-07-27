@@ -146,14 +146,18 @@ explanations are the `std::optional` return being materialised rather than kept 
 registers, and the benchmark's `DoNotOptimize` barrier forcing a store. This is
 recorded as open rather than quietly dropped.
 
-**Still open, and the Phase 4 baseline made it sharper rather than resolving it.**
-Measured against the naive book on an identical workload the flat book's best bid
-costs 10.2 ns against the tree's 5.38 ns, so this is not merely slower than its
-instruction count suggests, it is slower than a `std::map` doing the same job.
-`std::map` caches its extreme element as a pointer; the bitmap descent cannot beat
-a dereference. Whether the fix is caching the best price per side, returning
-something cheaper than `std::optional`, or accepting the cost, it needs a decision
-rather than another measurement.
+**Resolved in Phase 6, and the route there is the interesting part.** The Phase 4
+baseline first made it worse rather than better: measured against the naive book on
+an identical workload the flat book's best bid cost 10.2 ns against the tree's
+5.38 ns, so it was not merely slower than its instruction count suggested, it was
+slower than a `std::map` doing the same job.
+
+The first guess above, that `std::optional` was the problem, was wrong. So was the
+first fix attempt, which cached only the bitmap descent result and appeared to help
+until an A/B against the unmodified code in the same session showed the apparent
+gain was drift between measurement sessions. What worked was caching the final
+answer including cold levels, which is what the tree does. Details under "The
+comparative baseline against `std::map`" below.
 
 ### Reproduction
 
@@ -352,20 +356,31 @@ Run with `ob_baseline_bench`, 9 repetitions, medians reported.
 | Add, resting | 26.9 ns | 73.5 ns | **2.7x faster** |
 | Cancel | 10.3 ns | 56.0 ns | **5.4x faster** |
 | Match, one level consumed | 38.7 ns | 65.2 ns | **1.7x faster** |
-| Best bid query | 10.2 ns | 5.38 ns | **1.9x slower** |
+| Best bid query | **0.27 ns** | 4.48 ns | see below |
 
-**The flat book loses the best price query, and that is a real result rather than
-a measurement artifact.** `std::map` keeps cached begin and end pointers, so asking
-it for its extreme element is a pointer dereference. The flat book descends a
-three-level bitmap: three dependent loads plus the bit instructions. A tree is
-genuinely better at this one operation, and it is the operation a book performs
-constantly. This is the same 13.4 ns figure that Phase 1 recorded as unexplained,
-now with a comparison that makes the size of the gap concrete. It remains open.
+**The best price query was the one operation the flat book lost, and it has since
+been fixed.** The history is worth keeping because the fix is only meaningful
+against it. Phase 1 measured 13.4 ns and recorded it as unexplained. The Phase 4
+baseline made the gap concrete: 10.2 ns against the tree's 5.38 ns, a genuine loss,
+because `std::map` caches its extreme element while the bitmap performs three
+dependent loads that cannot overlap.
 
-The comparison is worth publishing precisely because it does not come out clean.
-Three operations favour the flat design by between 1.7 and 5.4 times, one favours
-the tree by roughly two, and a document that reported only the first three would be
-advertising.
+The fix caches the final answer to `best()`, cold levels included, repaired lazily
+when the best level empties. Measured back to back against the uncached code on the
+same machine in the same session, the query went from 8.24 ns to 0.27 ns.
+
+**That 0.27 ns needs its caveat stated, because on its own it is not credible.** It
+is below one cycle, which is exactly what a benchmark that has been optimised away
+also reports. `bm_query_noise_floor` exists to tell those apart: it runs the same
+loop shape with no query at all and reports 0.17 ns. So the honest statement is
+that the query costs about **0.09 ns above an empty loop, which is below what this
+harness can resolve**, against the tree's 4.3 ns above the same floor. The reason it
+pipelines so well is that it is now a single independent load per iteration, while
+the tree's rbegin is a dependent chain that serialises.
+
+The comparison is still worth publishing for the reason it always was: it did not
+start out clean. Reporting the loss first, then fixing it, is the sequence that
+makes the fix believable.
 
 #### Where the ratio comes from
 

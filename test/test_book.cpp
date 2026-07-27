@@ -837,5 +837,159 @@ TEST(BookFootprint, ReportsMemoryAtTheDefaultBandSize) {
             << "total                  " << (book->total_memory_bytes() / 1024U) << " KiB\n";
 }
 
+// ---------------------------------------------------------------------------
+// The best price cache.
+//
+// `best()` memoizes its answer, which makes it a second source of truth about
+// occupancy, and level_bitmap.hpp warns specifically about exactly that. These
+// tests exist because the failure mode of a stale cache is the worst kind: it
+// reports a price with no liquidity behind it, silently, and only under a
+// sequence that happens to hit the repair path.
+//
+// The differential test already compares best bid and ask against the reference
+// book after every command, so a drifting cache fails there too. These are the
+// direct version, aimed at the specific transitions the cache reasons about.
+// ---------------------------------------------------------------------------
+
+// Recomputes the answer from the levels themselves, ignoring the cache entirely,
+// so the assertion has an independent source of truth to compare against.
+std::optional<Ticks> brute_force_best(const TestBook& book, Side side, std::int32_t span) {
+  std::optional<Ticks> found;
+  for (std::int32_t price = -span; price <= span; ++price) {
+    if (book.depth_at(side, tick(price)) == 0U) {
+      continue;
+    }
+    if (!found.has_value() || (side == Side::buy ? price > found->raw() : price < found->raw())) {
+      found = tick(price);
+    }
+  }
+  return found;
+}
+
+TEST(BookBestPriceCache, RepairsWhenTheBestLevelEmpties) {
+  const std::unique_ptr<TestBook> book = make_book();
+
+  ASSERT_EQ(book->add(make_add(1, Side::buy, 10, 100)), AddStatus::ok);
+  ASSERT_EQ(book->add(make_add(2, Side::buy, 20, 100)), AddStatus::ok);
+  ASSERT_EQ(book->add(make_add(3, Side::buy, 30, 100)), AddStatus::ok);
+
+  EXPECT_EQ(book->best_bid(), tick(30));
+
+  // Emptying the best level is the case that invalidates the cache.
+  ASSERT_EQ(book->cancel(OrderId{3}), CancelStatus::ok);
+  EXPECT_EQ(book->best_bid(), tick(20));
+
+  ASSERT_EQ(book->cancel(OrderId{2}), CancelStatus::ok);
+  EXPECT_EQ(book->best_bid(), tick(10));
+
+  ASSERT_EQ(book->cancel(OrderId{1}), CancelStatus::ok);
+  EXPECT_EQ(book->best_bid(), std::nullopt);
+}
+
+TEST(BookBestPriceCache, EmptyingANonBestLevelLeavesTheBestAlone) {
+  const std::unique_ptr<TestBook> book = make_book();
+
+  ASSERT_EQ(book->add(make_add(1, Side::buy, 30, 100)), AddStatus::ok);
+  ASSERT_EQ(book->add(make_add(2, Side::buy, 10, 100)), AddStatus::ok);
+  EXPECT_EQ(book->best_bid(), tick(30));
+
+  ASSERT_EQ(book->cancel(OrderId{2}), CancelStatus::ok);
+  EXPECT_EQ(book->best_bid(), tick(30));
+}
+
+// The bug a naive cache makes: after the best empties the cache is unknown, and
+// the next level to become occupied is not necessarily the best one, because a
+// better level may still be resting further out.
+TEST(BookBestPriceCache, AWorseLevelOccupiedAfterInvalidationDoesNotBecomeTheBest) {
+  const std::unique_ptr<TestBook> book = make_book();
+
+  ASSERT_EQ(book->add(make_add(1, Side::buy, 50, 100)), AddStatus::ok);
+  ASSERT_EQ(book->add(make_add(2, Side::buy, 20, 100)), AddStatus::ok);
+  EXPECT_EQ(book->best_bid(), tick(50));
+
+  // Invalidate by emptying the best, then occupy a level worse than the survivor.
+  ASSERT_EQ(book->cancel(OrderId{1}), CancelStatus::ok);
+  ASSERT_EQ(book->add(make_add(3, Side::buy, 5, 100)), AddStatus::ok);
+
+  // 20 still rests and is better than the 5 just added.
+  EXPECT_EQ(book->best_bid(), tick(20));
+}
+
+TEST(BookBestPriceCache, ABetterLevelImprovesTheCachedBestOnBothSides) {
+  const std::unique_ptr<TestBook> book = make_book();
+
+  ASSERT_EQ(book->add(make_add(1, Side::buy, 10, 100)), AddStatus::ok);
+  ASSERT_EQ(book->add(make_add(2, Side::sell, 90, 100)), AddStatus::ok);
+  EXPECT_EQ(book->best_bid(), tick(10));
+  EXPECT_EQ(book->best_ask(), tick(90));
+
+  ASSERT_EQ(book->add(make_add(3, Side::buy, 40, 100)), AddStatus::ok);
+  ASSERT_EQ(book->add(make_add(4, Side::sell, 60, 100)), AddStatus::ok);
+  EXPECT_EQ(book->best_bid(), tick(40));
+  EXPECT_EQ(book->best_ask(), tick(60));
+}
+
+// A cold level can be better than anything in the band, so any cold mutation has
+// to invalidate. This is the case that a cache maintained only from the bitmap
+// would get wrong.
+TEST(BookBestPriceCache, AColdLevelBetterThanTheBandIsReflected) {
+  const std::unique_ptr<TestBook> book = make_book();
+
+  ASSERT_EQ(book->add(make_add(1, Side::buy, 100, 100)), AddStatus::ok);
+  EXPECT_EQ(book->best_bid(), tick(100));
+
+  // Far above the band, so it lands in cold storage rather than the bitmap.
+  const std::int32_t cold_price = 3000;
+  ASSERT_EQ(book->add(make_add(2, Side::buy, cold_price, 100)), AddStatus::ok);
+  ASSERT_GT(book->cold_level_count(), 0U);
+  EXPECT_EQ(book->best_bid(), tick(cold_price));
+
+  ASSERT_EQ(book->cancel(OrderId{2}), CancelStatus::ok);
+  EXPECT_EQ(book->best_bid(), tick(100));
+}
+
+TEST(BookBestPriceCache, SurvivesHeavyChurn) {
+  const std::unique_ptr<TestBook> book = make_book();
+
+  constexpr std::int32_t SPAN = 60;
+  std::uint64_t next_id = 1;
+  std::map<std::int32_t, std::uint64_t> live;
+
+  // A deterministic pseudo random walk over prices, adding and cancelling so that
+  // levels empty and refill in an order no hand written case would produce. The
+  // generator is deliberately fixed rather than seeded from a clock, because a
+  // test that fails only on some runs is worse than no test.
+  std::uint64_t rng = 0x9E3779B97F4A7C15ULL;
+  const auto next_random = [&rng]() {
+    rng ^= rng << 13U;
+    rng ^= rng >> 7U;
+    rng ^= rng << 17U;
+    return rng;
+  };
+
+  for (int step = 0; step < 4000; ++step) {
+    constexpr std::uint64_t PRICE_RANGE = 2ULL * static_cast<std::uint64_t>(SPAN);
+    const auto price = static_cast<std::int32_t>(next_random() % PRICE_RANGE) - SPAN;
+    const bool want_add = (next_random() & 1U) == 0U;
+
+    if (want_add && !live.contains(price)) {
+      if (book->add(make_add(next_id, Side::buy, price, 100)) == AddStatus::ok) {
+        live[price] = next_id;
+        ++next_id;
+      }
+    } else if (live.contains(price)) {
+      ASSERT_EQ(book->cancel(OrderId{live[price]}), CancelStatus::ok);
+      live.erase(price);
+    }
+
+    // The cache must agree with an independent recomputation at every step, not
+    // merely at the end, so that the first divergence is the reported failure.
+    ASSERT_EQ(book->best_bid(), brute_force_best(*book, Side::buy, SPAN))
+        << "best bid diverged at step " << step;
+  }
+
+  EXPECT_GT(next_id, 100U) << "the walk did not exercise enough adds to be meaningful";
+}
+
 }  // namespace
 }  // namespace ob

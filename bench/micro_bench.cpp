@@ -225,6 +225,9 @@ void bm_best_price(benchmark::State& state) {
 
   for (auto unused : state) {
     benchmark::DoNotOptimize(unused);
+    // Forces a reload of the book each iteration. Without it the query is loop
+    // invariant and the compiler hoists it, leaving an empty loop to measure.
+    benchmark::ClobberMemory();
     benchmark::DoNotOptimize(book->best_bid());
   }
 }

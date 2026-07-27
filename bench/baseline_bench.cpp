@@ -332,7 +332,28 @@ void bm_best_price_flat(benchmark::State& state) {
 
   for (auto unused : state) {
     benchmark::DoNotOptimize(unused);
+    // A full memory barrier on every iteration, so the compiler cannot hoist the
+    // query out of the loop. Without it the arm reports the cost of an empty loop,
+    // which is not hypothetical: caching the best price made this read 0.277 ns,
+    // below one cycle, and that impossibility is what gave it away. Escaping the
+    // pointer alone was tried first and was not enough.
+    benchmark::ClobberMemory();
     benchmark::DoNotOptimize(engine->book().best_bid());
+  }
+}
+
+// The harness's own noise floor for this shape of loop.
+//
+// Not decoration. Once the flat book's best price query became a single load, the
+// arm reported 0.26 ns, which is below one cycle and indistinguishable by eye from
+// a benchmark that had been optimised away entirely. The only way to tell those
+// apart is to measure a loop that provably does nothing and compare. If the query
+// arm and this arm agree, the honest statement is that the query is below what
+// this harness can resolve, not that it costs 0.26 ns.
+void bm_query_noise_floor(benchmark::State& state) {
+  for (auto unused : state) {
+    benchmark::DoNotOptimize(unused);
+    benchmark::ClobberMemory();
   }
 }
 
@@ -348,6 +369,8 @@ void bm_best_price_naive(benchmark::State& state) {
 
   for (auto unused : state) {
     benchmark::DoNotOptimize(unused);
+    // Same barrier as the flat arm, so the two stay comparable.
+    benchmark::ClobberMemory();
     benchmark::DoNotOptimize(book->best_bid());
   }
 }
@@ -543,6 +566,7 @@ BENCHMARK(bm_add_flat);
 BENCHMARK(bm_add_naive);
 BENCHMARK(bm_cancel_flat);
 BENCHMARK(bm_cancel_naive);
+BENCHMARK(bm_query_noise_floor);
 BENCHMARK(bm_best_price_flat);
 BENCHMARK(bm_best_price_naive);
 BENCHMARK(bm_match_flat);

@@ -189,11 +189,14 @@ but not cheap, and it lands in the latency tail rather than the mean. Measured i
 "Band rebasing, and what it costs", visible in the `p99.99` column for adds in
 BENCHMARKS.md.
 
-**Where this loses, stated here rather than buried.** The best price query costs
-10.2 ns against the tree's 5.38 ns, because `std::map` caches its extreme element
-as a pointer and three dependent bitmap loads cannot beat one dereference. The
-workloads that would defeat the whole structure, rather than just this one query,
-are in "Where this design would break, and what to build instead".
+**Where this lost, and what was done about it.** The best price query cost 10.2 ns
+against the tree's 5.38 ns, because `std::map` caches its extreme element as a
+pointer and three dependent bitmap loads cannot beat one dereference. That was a
+real hole in the argument above and it was reported as one. It is now fixed by
+caching the answer, described in the `best` member of `book.hpp`, which brings the
+query below the measurement floor. The workloads that would defeat the whole
+structure rather than just this one query are in "Where this design would break,
+and what to build instead".
 
 ## Order layout and why it is 40 bytes
 
@@ -1164,14 +1167,14 @@ symbol by liquidity tier, share one order arena across all symbols so the domina
 term is total live orders rather than symbols times capacity, and accept a tree or
 hash structure for the long tail of symbols that trade a few times a day.
 
-**A read-dominated workload.** Phase 4 measured the flat book's `best_bid()` at
-10.2 ns against a `std::map`'s 5.38 ns, because a tree caches its extreme element
-as a pointer and three dependent loads cannot beat one dereference. A workload that
-reads the touch far more often than it mutates the book is a workload this design
-loses. *What to build instead:* cache the best price per side and maintain it on
-the two mutation paths that can change it, which is the alternative the bitmap was
-originally chosen over, and which the measurement suggests deserves revisiting. It
-is recorded as open in ROADMAP.md rather than quietly dropped.
+**A read-dominated workload, which used to be on this list and no longer is.**
+Phase 4 measured the flat book's `best_bid()` at 10.2 ns against a `std::map`'s
+5.38 ns, so a workload reading the touch far more often than it mutated the book
+was one this design lost. The fix was the alternative the bitmap had originally
+been chosen over: cache the best price per side and maintain it on the paths that
+can change it. The measurement was right that it deserved revisiting, and the entry
+is kept here rather than deleted because the sequence, publishing a loss and then
+closing it, is the part worth reading.
 
 ## Out of scope, and why
 

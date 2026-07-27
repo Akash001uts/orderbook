@@ -95,15 +95,13 @@ synthetic number as a proxy for real throughput.
 
 ### Phase 4, benchmark harness
 
-- **Decide what to do about the best-price query.** No longer a measurement
-  question. The Phase 4 baseline settled the size of it: the flat book's
-  `best_bid()` costs 10.2 ns against the naive `std::map` book's 5.38 ns on an
-  identical workload, so the bitmap descent loses to a tree that caches its extreme
-  element as a pointer. Three dependent loads cannot beat one dereference. The
-  options are to cache the best price per side and maintain it on the mutation
-  paths, to return something cheaper than `std::optional`, or to accept the cost
-  and say so. This needs a decision in the DESIGN.md decision/alternatives/cost
-  format, not another benchmark.
+- **The best-price query is done.** It was the one operation the flat book lost,
+  10.2 ns against the naive book's 5.38 ns. Resolved by caching the final answer to
+  `best()` and repairing it lazily when the best level empties, which puts the query
+  below the harness's noise floor while leaving add and cancel unchanged within
+  noise. Results in BENCHMARKS.md, reasoning in `book.hpp`, and six dedicated tests
+  plus the differential suite guard the cache.
+
 Phase 4 is otherwise complete: the microbenchmark set, the `std::map` baseline,
 the HdrHistogram latency harness, and the measurement discipline all landed.
 

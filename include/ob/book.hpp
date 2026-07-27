@@ -219,6 +219,7 @@ class Book {
       link_at_tail(level, index);
       if (was_empty) {
         occupied_[side_index(request.side)].set(slot);
+        note_occupied(request.side, request.price);
       }
       maybe_rebase(slot);
       return AddStatus::ok;
@@ -598,6 +599,7 @@ class Book {
       unlink(level, index);
       if (level.empty()) {
         occupied_[side_index(side)].clear(slot);
+        note_vacated(side, price);
       }
       return;
     }
@@ -619,6 +621,43 @@ class Book {
       return std::nullopt;
     }
     return price_of_slot(slot);
+  }
+
+  // A newly occupied level can only improve the best, never worsen it, so this is
+  // a compare and a branch that predicts almost perfectly. When the cache is
+  // already unknown it stays unknown, because the newly occupied level is not
+  // necessarily the best: a better one may still be occupied further out.
+  void note_occupied(Side side, Ticks price) noexcept {
+    const std::size_t index = side_index(side);
+    if (!best_valid_[index]) {
+      return;
+    }
+    const std::optional<Ticks>& current = best_cache_[index];
+    if (!current.has_value() || better_price(side, price, *current)) {
+      best_cache_[index] = price;
+    }
+  }
+
+  // Vacating any level other than the best cannot change the best, which is the
+  // overwhelmingly common case and costs one compare.
+  void note_vacated(Side side, Ticks price) noexcept {
+    const std::size_t index = side_index(side);
+    if (best_valid_[index] && best_cache_[index] == price) {
+      best_valid_[index] = false;
+    }
+  }
+
+  // Rebasing moves every occupied level and cold mutations can introduce a price
+  // better than anything in the band, so both invalidate outright. Neither is on a
+  // path where the cost is measurable: a rebase has just memmoved the band, and a
+  // cold mutation has just touched an ordered container.
+  void invalidate_best() noexcept {
+    best_valid_[0] = false;
+    best_valid_[1] = false;
+  }
+
+  [[nodiscard]] static bool better_price(Side side, Ticks candidate, Ticks current) noexcept {
+    return side == Side::buy ? candidate > current : candidate < current;
   }
 
   // Nearest occupied band level strictly worse than `from`.
@@ -689,12 +728,57 @@ class Book {
   // empty in every normal book, so the common path is one load and a branch that
   // predicts perfectly, and the ordered container is only touched when it actually
   // holds something.
-  [[nodiscard]] std::optional<Ticks> best(Side side) const noexcept {
+  [[nodiscard]] std::optional<Ticks> compute_best(Side side) const noexcept {
     const std::optional<Ticks> hot = band_best(side);
     if (cold_levels_[side_index(side)] == 0U) {
       return hot;
     }
     return better_of(side, hot, cold_best(side));
+  }
+
+  // The cached best price, and why it exists.
+  //
+  // Phase 4 measured `best_bid()` at 10.2 ns against the naive `std::map` book's
+  // 5.38 ns on an identical workload. That was the one operation where the flat
+  // design lost, and the mechanism was not mysterious: a tree caches its extreme
+  // element, so answering the query is a dereference, while the bitmap descent is
+  // three dependent loads that cannot overlap because each supplies the index for
+  // the next. Three dependent loads never beat one.
+  //
+  // Caching only the descent result was tried first and appeared to close about a
+  // fifth of the gap. It did not: rerunning the uncached code under the same
+  // machine conditions produced the same figure, so that apparent gain was drift
+  // between measurement sessions rather than an effect of the change. The lesson
+  // is recorded because it nearly went in as a result: an A/B on this machine has
+  // to be run back to back, not against a number taken on another day.
+  //
+  // What works is caching the **final answer** to `best(side)`, cold levels
+  // included, which is exactly what `std::map` caches. It reduces the query to a
+  // predictable branch and one load.
+  //
+  // Repair is lazy. Vacating the best level marks the cache unknown and the next
+  // query pays one descent, rather than the cancel paying it whether anyone asks or
+  // not. That keeps the cost on the reader that wants the answer.
+  //
+  // **This is the second source of truth that level_bitmap.hpp warns about**, and
+  // the warning is right, so the coupling is an explicit invariant rather than an
+  // implicit one: `best_valid_[side]` is true only when `best_cache_[side]` equals
+  // what `compute_best(side)` would return right now. Every path that can change
+  // that answer goes through `note_occupied`, `note_vacated`, or
+  // `invalidate_best`, and there are exactly four: a level becoming occupied, a
+  // level becoming empty, any cold mutation, and a rebase. The differential test
+  // compares best bid and ask against the reference book after every single
+  // command, so a cache that drifts fails immediately rather than silently, and
+  // the `BookBestPriceCache` suite exercises the repair path directly. Injecting a
+  // cache that never invalidates makes four of its six cases fail, and all four
+  // differential configurations too.
+  [[nodiscard]] std::optional<Ticks> best(Side side) const noexcept {
+    const std::size_t index = side_index(side);
+    if (!best_valid_[index]) [[unlikely]] {
+      best_cache_[index] = compute_best(side);
+      best_valid_[index] = true;
+    }
+    return best_cache_[index];
   }
 
   // -------------------------------------------------------------------------
@@ -773,6 +857,7 @@ class Book {
     band_base_ = new_base;
     ++rebase_count_;
     refresh_cold_counts();
+    invalidate_best();
   }
 
   [[nodiscard]] bool rebase_is_feasible(std::int64_t shift, Ticks new_base) const noexcept {
@@ -816,6 +901,10 @@ class Book {
   }
 
   void refresh_cold_counts() noexcept {
+    // The single choke point for cold mutations, which is why the best price
+    // cache is invalidated here: a cold level can be better than anything in the
+    // band, so any cold change can change the answer.
+    invalidate_best();
     cold_levels_[side_index(Side::buy)] = cold_.size(Side::buy);
     cold_levels_[side_index(Side::sell)] = cold_.size(Side::sell);
   }
@@ -919,6 +1008,16 @@ class Book {
 
   std::array<std::vector<PriceLevel>, 2> levels_{};
   std::array<Bitmap, 2> occupied_{};
+
+  // Memoized result of the bitmap descent, per side. See band_best for the
+  // invariant these two must satisfy together and why the cache exists at all.
+  //
+  // Mutable because the repair happens inside a const query. That is the standard
+  // shape for a lazily computed cache and it does not weaken the invariant: the
+  // observable value of best_bid and best_ask is unchanged by it, which is the
+  // property the differential test checks after every command.
+  mutable std::array<std::optional<Ticks>, 2> best_cache_{};
+  mutable std::array<bool, 2> best_valid_{};
 
   // Mirror of cold_.size(side), cached so that best() can skip the ordered
   // container with a single load in the overwhelmingly common case where nothing
