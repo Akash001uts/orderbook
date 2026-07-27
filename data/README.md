@@ -36,15 +36,65 @@ automated testing. Confirm NASDAQ's current terms before the repository is made
 public, since redistribution of exchange data is theirs to permit and not something
 this project should assume.
 
-## Getting the full capture
+## The full dataset
 
-`scripts/fetch_nasdaq_sample.sh` downloads and decompresses a full day. The files
-are 3.5 to 4.8 GB compressed and roughly 10 to 15 GB decompressed, which is why
-none of them is committed here: GitHub rejects any file over 100 MB, and Git LFS's
-free tier is 1 GB.
+The complete capture is published as **GitHub release assets**, not committed to
+the repository. Both exist on purpose and neither makes the other redundant: the
+slice above is what makes `ctest` work on a fresh clone with no download, and the
+release is the complete dataset behind every finding in DESIGN.md.
 
-The full capture is what `--survey` mode is for, and it is worth running once. On
-the 2019-12-30 sample the parser reports 8 906 symbols and zero unknown message
-types across 11 958 712 messages.
+### Why not commit it, and why compressing harder does not help
+
+Git rejects any file over 100 MB at push time. That limit is not negotiable by
+compressing better, and the numbers were measured on this data rather than assumed:
+
+| | Size | Ratio |
+| --- | --- | --- |
+| Raw ITCH | 5 533 732 B | - |
+| gzip -9, what NASDAQ ships | 1 609 752 B | 3.44x |
+| xz -9 | 1 166 356 B | 4.74x |
+
+xz beats gzip by 38 percent, which takes the 3.52 GB archive to roughly 2.5 GB.
+That is still 25 times over the per-file limit. Git LFS does not close it either:
+the free tier is 1 GB of storage and 1 GB of monthly bandwidth.
+
+Splitting the archive into sub-100 MB chunks would technically pass the check and
+is the wrong answer anyway. It would put 2.5 GB into the git history permanently,
+so every clone of a source repository would drag it down forever, and GitHub's own
+guidance is explicit that repositories are not for bulk data.
+
+### What release assets give instead
+
+A release asset can be 2 GB, it appears on the repository page, and it is not part
+of the git history, so a clone stays at a few megabytes. `scripts/publish_dataset.sh`
+recompresses with xz, splits below the asset limit, checksums every part, and
+uploads them with a manifest describing how to reassemble:
+
+```bash
+scripts/publish_dataset.sh data/12302019.NASDAQ_ITCH50
+```
+
+Run it with `PUBLISH_DRY_RUN=1` first to see the parts and checksums without
+uploading anything.
+
+### Or fetch it from the source
+
+`scripts/fetch_nasdaq_sample.sh` downloads a full day straight from NASDAQ, which
+is the authoritative copy and needs no intermediary:
+
+```bash
+scripts/fetch_nasdaq_sample.sh 12302019
+scripts/fetch_nasdaq_sample.sh 12302019 data --prefix-only   # first 1 GiB only
+```
+
+`itch_replay --survey` is what to point at a full capture first. On the 2019-12-30
+sample it reports 8 906 symbols and zero unknown message types.
+
+**One caveat before the repository goes public.** Committing a small derived slice
+and republishing a complete copy of an exchange's archive are different asks, even
+though NASDAQ hosts these publicly with no login. While the repository is private
+this is storage. Confirm their terms before the Phase 6 public flip, and if the
+answer is no, the fetch script alone is sufficient: it points at the authoritative
+source and nothing is lost but convenience.
 
 Everything in this directory other than this file and the slice is ignored by git.
