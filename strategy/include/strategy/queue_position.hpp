@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <optional>
 #include <vector>
 
 #include "ob/order.hpp"
@@ -40,8 +39,6 @@ struct StrategyOrder {
   Side side = Side::buy;
   Ticks price{};
   std::uint64_t remaining = 0;
-  std::uint64_t original_size = 0;
-  std::uint64_t submitted_ns = 0;
 
   // Estimated shares ahead of us in this level's queue.
   //
@@ -124,15 +121,6 @@ class QueueEstimator {
   }
 
   [[nodiscard]] const std::vector<StrategyOrder>& orders() const noexcept { return orders_; }
-
-  [[nodiscard]] std::optional<StrategyOrder> find(OrderId id) const {
-    for (const StrategyOrder& order : orders_) {
-      if (order.id == id) {
-        return order;
-      }
-    }
-    return std::nullopt;
-  }
 
   // Refreshes the behind estimate from the book's actual aggregate at each level.
   // Called after every venue event, because the denominator of the uniform cancel

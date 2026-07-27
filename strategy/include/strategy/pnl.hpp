@@ -71,7 +71,6 @@ class PnlAccount {
     }
     mid_ = mid;
     has_mark_ = true;
-    last_timestamp_ns_ = timestamp_ns;
 
     resolve_markouts(timestamp_ns);
 
@@ -164,8 +163,6 @@ class PnlAccount {
   [[nodiscard]] std::uint64_t trade_through_fills() const noexcept { return trade_through_fills_; }
 
   [[nodiscard]] std::uint64_t time_holding_ns() const noexcept { return time_holding_ns_; }
-
-  [[nodiscard]] double mid() const noexcept { return mid_; }
 
   [[nodiscard]] double fill_ratio() const {
     return quoted_shares_ == 0
@@ -315,7 +312,6 @@ class PnlAccount {
   std::uint64_t quoted_shares_ = 0;
   std::uint64_t trade_through_fills_ = 0;
 
-  std::uint64_t last_timestamp_ns_ = 0;
   std::uint64_t previous_ns_ = 0;
   std::uint64_t time_holding_ns_ = 0;
 

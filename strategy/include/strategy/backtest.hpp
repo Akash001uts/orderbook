@@ -209,8 +209,6 @@ class Backtest {
       observe_crossed(timestamp);
       requote(venue_bid, venue_ask, mid, timestamp);
     }
-
-    last_timestamp_ = timestamp;
   }
 
   [[nodiscard]] static bool is_execution(itch::MessageType type) noexcept {
@@ -383,8 +381,6 @@ class Backtest {
     order.side = side;
     order.price = price;
     order.remaining = config_.maker.quote_size;
-    order.original_size = config_.maker.quote_size;
-    order.submitted_ns = timestamp;
     queue_.on_insert(order, ahead);
 
     pnl_.on_quote_submitted(config_.maker.quote_size);
@@ -409,7 +405,6 @@ class Backtest {
   std::uint64_t quotes_cancelled_ = 0;
   std::uint64_t quotes_rejected_ = 0;
 
-  std::uint64_t last_timestamp_ = 0;
   std::uint64_t crossed_since_ = 0;
   bool was_crossed_ = false;
 

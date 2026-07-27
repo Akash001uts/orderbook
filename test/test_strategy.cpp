@@ -29,7 +29,6 @@ StrategyOrder make_order(Side side, std::int32_t price, std::uint64_t size) {
   order.side = side;
   order.price = Ticks{price};
   order.remaining = size;
-  order.original_size = size;
   return order;
 }
 
