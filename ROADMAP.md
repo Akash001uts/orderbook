@@ -122,14 +122,16 @@ a permission, neither of which is a writing task.
 
 - **Flipping the repository to public is deliberately deferred.** The owner asked
   that it not happen yet, so it does not. Nothing in the documentation blocks it.
-- **Confirm NASDAQ's terms before any public flip.** This is the one genuine
-  blocker rather than a preference. Committing a small derived slice for automated
-  testing and republishing a complete copy of an exchange archive are different
-  asks, even though NASDAQ hosts these publicly with no login. While the repository
-  is private this is storage. If the answer turns out to be no, deleting
-  `data/qqq_slice.itch` and relying on `scripts/fetch_nasdaq_sample.sh` costs only
-  convenience, but the tests that assert against the committed slice would need
-  their fixture regenerated on demand. Recorded also in `data/README.md`.
+- **Decide the market data question before any public flip.** The one genuine
+  blocker rather than a preference, and it is an owner decision rather than a
+  technical one. Both options are written up with their costs in
+  [data/README.md](data/README.md), "Before the repository goes public: the two
+  options": keep the committed 5.5 MB slice, or ship no data and rely on the fetch
+  script. A third middle path, replacing the slice with a semantically equivalent
+  synthetic fixture, is described there too along with what it gives up. Whichever
+  way the slice goes, `scripts/publish_dataset.sh` stays unrun until the question
+  is answered, because publishing the complete archive is the larger ask of the
+  two.
 
 The architecture diagram was reviewed and kept as an ASCII sketch. It fits in a
 terminal, it survives a plain text diff, and it already shows the strategy layer
