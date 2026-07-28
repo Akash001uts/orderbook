@@ -46,7 +46,7 @@ WarningsAsErrors: >
   portability-*,
   -bugprone-easily-swappable-parameters
 
-HeaderFilterRegex: '(include/ob|itch/include|strategy/include)/.*\.hpp$'
+HeaderFilterRegex: '(include/ob|itch/include|strategy/include|json/include)/.*\.hpp$'
 
 CheckOptions:
   - key: readability-identifier-naming.FunctionCase

@@ -20,6 +20,8 @@
 #include "itch/messages.hpp"
 #include "itch/parser.hpp"
 #include "itch/replay.hpp"
+#include "json/provenance.hpp"
+#include "json/writer.hpp"
 #include "ob/book.hpp"
 
 // Replays an ITCH 5.0 file into a book, filtered to one symbol, and reports what
@@ -56,10 +58,18 @@ void print_usage() {
   --limit N         stop after N messages, 0 for the whole file (default 0)
   --tick N          tick size in scaled units, 100 is a penny (default 100)
   --extract FILE    write only this symbol's messages to FILE, as valid ITCH
+  --json FILE       also write the replay result to FILE as JSON
+  --json-depth FILE also write the end of replay depth ladder to FILE as JSON
+  --depth-levels N  levels per side in the depth ladder (default 20)
+  --sha256 HEX      record this hash of the input in the JSON provenance block
 
 --extract is how a multi-gigabyte capture becomes a test fixture small enough to
 commit: it keeps the system event and stock directory messages the replay driver
 needs, plus every message for the chosen symbol, and drops the rest.
+
+--json exists because the results site reads these numbers, and stdout is not an
+interface: this repository rewords its output deliberately and often, so anything
+that scraped it would break on an edit that changed no behaviour.
 )";
 }
 
@@ -251,12 +261,218 @@ void extract(std::span<const std::byte> data,
             << ") into " << path << ", " << out.size() << " bytes\n";
 }
 
+struct ReplayOptions {
+  std::string symbol;
+  std::uint32_t arena = 1U << 18;
+  std::size_t cold = 8192;
+  std::size_t limit = 0;
+  std::int64_t tick_size = 100;
+  std::string json_path;
+  std::string depth_path;
+  std::size_t depth_levels = 20;
+};
+
+// What the replay observed, separated from how it is reported. The text block and
+// the JSON artifact are two renderings of this one struct, so they cannot come to
+// disagree about a number the way two independent print paths would.
+struct ReplayOutcome {
+  std::size_t peak_live_orders = 0;
+  std::size_t peak_occupied_levels = 0;
+  std::int32_t lowest_tick = 0;
+  std::int32_t highest_tick = 0;
+  bool touch_seen = false;
+};
+
+[[nodiscard]] std::ofstream open_output(const std::string& path) {
+  std::ofstream file(path, std::ios::trunc);
+  if (!file) {
+    std::cerr << "cannot open " << path << " for writing\n";
+    std::exit(1);
+  }
+  return file;
+}
+
+// The top levels of one side, nearest the touch first. snapshot_levels returns a
+// side ascending by price, so bids need reversing and asks do not: the level
+// closest to the touch is the highest bid and the lowest ask.
+void write_ladder(ob::json::Writer& writer,
+                  const ReplayBook& book,
+                  ob::Side side,
+                  std::size_t levels) {
+  std::vector<ReplayBook::LevelSnapshot> all;
+  book.snapshot_levels(side, all);
+
+  if (side == ob::Side::buy) {
+    std::ranges::reverse(all);
+  }
+
+  writer.begin_array();
+  for (std::size_t index = 0; index < all.size() && index < levels; ++index) {
+    const ReplayBook::LevelSnapshot& level = all[index];
+    writer.begin_object();
+    writer.field("tick", level.price.raw());
+    writer.field("price", book.price_config().to_price(level.price).raw());
+    writer.field("quantity", static_cast<std::uint64_t>(level.aggregate_qty.raw()));
+    writer.field("orders", level.order_count);
+    writer.end_object();
+  }
+  writer.end_array();
+}
+
+void write_depth_json(const ReplayOptions& options,
+                      const ob::json::Provenance& provenance,
+                      const ReplayBook& book) {
+  std::ofstream file = open_output(options.depth_path);
+  ob::json::Writer writer(file);
+
+  writer.begin_object();
+  ob::json::write_header(writer, provenance);
+  writer.field("symbol", options.symbol);
+  writer.field("levels_per_side", options.depth_levels);
+  writer.field("price_scale", static_cast<std::int64_t>(ob::itch::PRICE_SCALE));
+  writer.field("tick_size", options.tick_size);
+  writer.field("occupied_bid_levels", book.occupied_level_count(ob::Side::buy));
+  writer.field("occupied_ask_levels", book.occupied_level_count(ob::Side::sell));
+
+  writer.key("bids");
+  write_ladder(writer, book, ob::Side::buy, options.depth_levels);
+  writer.key("asks");
+  write_ladder(writer, book, ob::Side::sell, options.depth_levels);
+
+  writer.end_object();
+  writer.finish();
+}
+
+void write_touch(ob::json::Writer& writer,
+                 const ReplayBook& book,
+                 const char* tick_key,
+                 const char* price_key,
+                 const std::optional<ob::Ticks>& price) {
+  if (!price.has_value()) {
+    writer.null_field(tick_key);
+    writer.null_field(price_key);
+    return;
+  }
+  writer.field(tick_key, price->raw());
+  writer.field(price_key, book.price_config().to_price(*price).raw());
+}
+
+void write_replay_json(const ReplayOptions& options,
+                       const ob::json::Provenance& provenance,
+                       const ReplayBook& book,
+                       const Driver& driver,
+                       const ob::itch::ParseResult& result,
+                       const ReplayOutcome& outcome) {
+  const ob::itch::ReplayStats& stats = driver.stats();
+
+  std::ofstream file = open_output(options.json_path);
+  ob::json::Writer writer(file);
+
+  writer.begin_object();
+  ob::json::write_header(writer, provenance);
+
+  writer.field("symbol", options.symbol);
+
+  writer.key("config");
+  writer.begin_object();
+  writer.field("band_levels", static_cast<std::uint64_t>(REPLAY_BAND));
+  writer.field("arena_capacity", options.arena);
+  writer.field("max_cold_levels_per_side", options.cold);
+  writer.field("tick_size", options.tick_size);
+  writer.field("price_scale", static_cast<std::int64_t>(ob::itch::PRICE_SCALE));
+  writer.field("message_limit", options.limit);
+  writer.end_object();
+
+  writer.key("parse");
+  writer.begin_object();
+  writer.field("status", static_cast<std::int64_t>(result.status));
+  writer.field("messages", result.messages);
+  writer.field("bytes_consumed", result.bytes_consumed);
+  writer.field("unknown_types", result.unknown_types);
+  writer.end_object();
+
+  writer.key("locate");
+  writer.begin_object();
+  writer.field("resolved", driver.symbol_resolved());
+  writer.field("code", driver.resolved_locate());
+  writer.end_object();
+
+  writer.key("messages");
+  writer.begin_object();
+  writer.field("applied", stats.messages_applied);
+  writer.field("other_symbol", stats.other_symbol);
+  writer.field("adds", stats.adds);
+  writer.field("executions", stats.executions);
+  writer.field("cancels", stats.cancels);
+  writer.field("deletes", stats.deletes);
+  writer.field("replaces", stats.replaces);
+  writer.field("trades", stats.trades);
+  writer.field("cross_trades", stats.cross_trades);
+  writer.field("broken_trades", stats.broken_trades);
+  writer.field("system_events", stats.system_events);
+  writer.end_object();
+
+  writer.key("rejections");
+  writer.begin_object();
+  writer.field("off_tick_prices", stats.off_tick_prices);
+  writer.field("rejected_adds", stats.rejected_adds);
+  writer.field("unknown_order_references", stats.unknown_order_references);
+  writer.end_object();
+
+  writer.key("book");
+  writer.begin_object();
+  writer.field("final_resting_orders", book.pool().live_count());
+  writer.field("occupied_bid_levels", book.occupied_level_count(ob::Side::buy));
+  writer.field("occupied_ask_levels", book.occupied_level_count(ob::Side::sell));
+  writer.field("rebases", book.rebase_count());
+  writer.field("rebases_abandoned", book.rebase_skipped_count());
+  writer.field("cold_levels", book.cold_level_count());
+  writer.field("cold_operations", book.cold_operation_count());
+  writer.end_object();
+
+  // The evidence behind the two capacity constants, in the artifact rather than
+  // only in the printed block, because the site shows the peak against the arena
+  // default and that comparison is the point of the whole section.
+  writer.key("sizing");
+  writer.begin_object();
+  writer.field("peak_live_orders", outcome.peak_live_orders);
+  writer.field("arena_capacity", book.pool().capacity());
+  writer.field("peak_occupied_levels", outcome.peak_occupied_levels);
+  writer.field("band_levels", static_cast<std::uint64_t>(REPLAY_BAND));
+  if (outcome.touch_seen) {
+    const std::int64_t span = static_cast<std::int64_t>(outcome.highest_tick) - outcome.lowest_tick;
+    writer.field("touch_low_tick", outcome.lowest_tick);
+    writer.field("touch_high_tick", outcome.highest_tick);
+    writer.field("touch_span_ticks", span);
+    const double percent = static_cast<double>(span) * 100.0 / static_cast<double>(REPLAY_BAND);
+    writer.field("touch_span_band_percent", percent, ob::json::PERCENT_DECIMALS);
+  } else {
+    writer.null_field("touch_low_tick");
+    writer.null_field("touch_high_tick");
+    writer.null_field("touch_span_ticks");
+    writer.null_field("touch_span_band_percent");
+  }
+  writer.end_object();
+
+  writer.key("final_touch");
+  writer.begin_object();
+  write_touch(writer, book, "bid_tick", "bid_price", book.best_bid());
+  write_touch(writer, book, "ask_tick", "ask_price", book.best_ask());
+  writer.end_object();
+
+  writer.end_object();
+  writer.finish();
+}
+
 void replay_symbol(std::span<const std::byte> data,
-                   const std::string& symbol,
-                   std::uint32_t arena,
-                   std::size_t cold,
-                   std::size_t limit,
-                   std::int64_t tick_size) {
+                   const ReplayOptions& options,
+                   const ob::json::Provenance& provenance) {
+  const std::string& symbol = options.symbol;
+  const std::uint32_t arena = options.arena;
+  const std::size_t cold = options.cold;
+  const std::size_t limit = options.limit;
+  const std::int64_t tick_size = options.tick_size;
+
   ReplayBook::Config config;
   // Base price zero and a penny tick, so a tick index is simply the price in
   // hundredths of a cent divided by 100. Real ITCH prices are absolute, so unlike
@@ -274,6 +490,7 @@ void replay_symbol(std::span<const std::byte> data,
   // capacity can be justified from data rather than chosen and defended
   // afterwards. Both defaults were originally picked as plausible round numbers,
   // which is a weak position for a project whose whole argument is measurement.
+  ReplayOutcome outcome;
   std::size_t peak_live_orders = 0;
   std::size_t peak_occupied_levels = 0;
   std::int32_t lowest_tick = std::numeric_limits<std::int32_t>::max();
@@ -365,6 +582,23 @@ void replay_symbol(std::span<const std::byte> data,
   } else {
     std::cout << "none\n";
   }
+
+  outcome.peak_live_orders = peak_live_orders;
+  outcome.peak_occupied_levels = peak_occupied_levels;
+  outcome.touch_seen = highest_tick >= lowest_tick;
+  if (outcome.touch_seen) {
+    outcome.lowest_tick = lowest_tick;
+    outcome.highest_tick = highest_tick;
+  }
+
+  if (!options.json_path.empty()) {
+    write_replay_json(options, provenance, *book, driver, result, outcome);
+    std::cout << "\nwrote " << options.json_path << '\n';
+  }
+  if (!options.depth_path.empty()) {
+    write_depth_json(options, provenance, *book);
+    std::cout << "wrote " << options.depth_path << '\n';
+  }
 }
 
 }  // namespace
@@ -379,6 +613,10 @@ int main(int argc, char** argv) {
   std::size_t cold = 8192;
   std::size_t limit = 0;
   std::int64_t tick_size = 100;
+  std::string json_path;
+  std::string depth_path;
+  std::size_t depth_levels = 20;
+  std::string sha256;
   std::string value;
 
   for (int index = 1; index < argc; ++index) {
@@ -400,7 +638,26 @@ int main(int argc, char** argv) {
       extract_to = value;
       continue;
     }
+    if (match_option(argument, "--json", index, argc, argv, value)) {
+      json_path = value;
+      continue;
+    }
+    if (match_option(argument, "--json-depth", index, argc, argv, value)) {
+      depth_path = value;
+      continue;
+    }
+    if (match_option(argument, "--sha256", index, argc, argv, value)) {
+      sha256 = value;
+      continue;
+    }
     std::uint64_t unsigned_value = 0;
+    if (match_option(argument, "--depth-levels", index, argc, argv, value)) {
+      if (!parse_u64(value, unsigned_value) || unsigned_value == 0) {
+        bad_value("--depth-levels", value);
+      }
+      depth_levels = static_cast<std::size_t>(unsigned_value);
+      continue;
+    }
     if (match_option(argument, "--top", index, argc, argv, value)) {
       if (!parse_u64(value, unsigned_value)) {
         bad_value("--top", value);
@@ -470,6 +727,24 @@ int main(int argc, char** argv) {
     return 0;
   }
 
-  replay_symbol(mapped.bytes(), symbol, arena, cold, limit, tick_size);
+  ReplayOptions options;
+  options.symbol = symbol;
+  options.arena = arena;
+  options.cold = cold;
+  options.limit = limit;
+  options.tick_size = tick_size;
+  options.json_path = json_path;
+  options.depth_path = depth_path;
+  options.depth_levels = depth_levels;
+
+  ob::json::Provenance provenance;
+  provenance.tool = "itch_replay";
+  provenance.version = OB_VERSION_STRING;
+  provenance.source_path = path;
+  provenance.source_bytes = mapped.size();
+  provenance.source_sha256 = sha256;
+  provenance.command = ob::json::command_line(argc, argv);
+
+  replay_symbol(mapped.bytes(), options, provenance);
   return 0;
 }

@@ -148,6 +148,33 @@ target_sources(ob_strategy INTERFACE FILE_SET HEADERS
     strategy/include/strategy/backtest.hpp)
 
 # ---------------------------------------------------------------------------
+# JSON output.
+#
+# Header only and deliberately tiny. The tools emit machine readable artifacts
+# that the results site binds to and that a CI job regenerates and diffs, so this
+# needs to produce identical bytes for identical inputs and to add no dependency.
+# Writing it by hand is cheaper than justifying a fetched library for a document
+# nothing in this repository ever parses.
+#
+# It links nothing, not even ob, because output formatting has no business
+# knowing about the book.
+# ---------------------------------------------------------------------------
+add_library(ob_json INTERFACE)
+
+target_include_directories(ob_json INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/json/include)
+target_link_libraries(ob_json INTERFACE ob_flags)
+
+# The version string every artifact carries. Handed to the code by the build so
+# that it cannot drift from the project version the way a second literal would.
+target_compile_definitions(ob_json INTERFACE OB_VERSION_STRING="${PROJECT_VERSION}")
+
+target_sources(ob_json INTERFACE FILE_SET HEADERS
+  BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/json/include
+  FILES
+    json/include/json/writer.hpp
+    json/include/json/provenance.hpp)
+
+# ---------------------------------------------------------------------------
 # Dependencies, vendored through FetchContent so that a clone plus a configure
 # is enough to build. Every entry needs a justification in DESIGN.md.
 # ---------------------------------------------------------------------------
@@ -387,7 +414,7 @@ if(OB_BUILD_BENCH)
     bench/latency_bench.cpp)
 
   target_link_libraries(ob_latency_bench
-    PRIVATE ob ob_itch ob_flags ob_bench_harness hdr_histogram_static)
+    PRIVATE ob ob_itch ob_flags ob_json ob_bench_harness hdr_histogram_static)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -402,10 +429,10 @@ if(OB_BUILD_TOOLS)
   add_executable(itch_replay
     tools/itch_replay.cpp)
 
-  target_link_libraries(itch_replay PRIVATE ob_itch ob_flags)
+  target_link_libraries(itch_replay PRIVATE ob_itch ob_flags ob_json)
 
   add_executable(ob_strategy_backtest
     tools/strategy_backtest.cpp)
 
-  target_link_libraries(ob_strategy_backtest PRIVATE ob_strategy ob_flags)
+  target_link_libraries(ob_strategy_backtest PRIVATE ob_strategy ob_flags ob_json)
 endif()
