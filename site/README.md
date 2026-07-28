@@ -31,6 +31,23 @@ python scripts/build_index.py                          # rebuild index.json
 The first is what CI reruns and diffs. The second needs the 7.68 GB capture, which
 is gitignored and lives on one machine.
 
+## Deploying
+
+Both Netlify and Vercel build from a private repository on their free tiers, so
+this can go up before the question in `data/README.md` about NASDAQ's terms is
+settled. Nothing server side runs and there are no environment variables.
+
+Netlify reads `netlify.toml` at the repository root and needs no dashboard
+configuration. Vercel reads `site/vercel.json`, and needs its **Root Directory**
+set to `site` in the project settings; everything else follows from that file.
+
+Only derived JSON ships. No `.itch` data enters `site/`, which is worth checking
+before the first deploy:
+
+```bash
+find site -name '*.itch' -o -name '*.gz'
+```
+
 ## What this page is allowed to state rather than read
 
 Two tables carry numbers that are not in any artifact: the hero's `std::map`

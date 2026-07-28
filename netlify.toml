@@ -1,0 +1,40 @@
+# Netlify build configuration for the results site.
+#
+# Both Netlify and Vercel build from a private repository on their free tiers,
+# which is why the site can be deployed before the question in data/README.md about
+# NASDAQ's terms is settled. Nothing server side runs: this is a static build of
+# site/, and the artifacts it reads are committed JSON. No environment variables,
+# no secrets, nothing to leak.
+#
+# The equivalent Vercel configuration is site/vercel.json.
+
+[build]
+  base = "site"
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# The page keeps its selected symbol in the URL hash rather than in a path, so
+# there are no client side routes to rewrite. A request for a path that does not
+# exist should 404 rather than silently serve the index, because a broken artifact
+# path failing loudly is the whole point of the guard around these files.
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+
+# Hashed assets are immutable. The artifacts are not: regenerating them is a
+# commit, and a reader arriving after one should see the new numbers.
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/*.json"
+  [headers.values]
+    Cache-Control = "public, max-age=300, must-revalidate"
