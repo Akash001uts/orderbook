@@ -15,7 +15,7 @@ rather than a smoke test.
 
 All six phases complete. The book, the matching engine, the ITCH 5.0 pipeline, the
 benchmark harness, the market making strategy layer, and the documentation are
-built and tested: 122 tests green on GCC and Clang across debug, release,
+built and tested: 127 tests green on GCC and Clang across debug, release,
 relwithdebinfo, and all three sanitizers, with 14 CI jobs covering both compilers,
 every preset, all three sanitizers, clang-tidy, clang-format, the differential
 test, and a libFuzzer run. The repository is private.
@@ -113,11 +113,20 @@ available host exposes hardware performance counters: the flat book allocates
 **0** times per add, the `std::map` book **2.064**, a figure that decomposes
 exactly into a list node, a hash node, and one map node per new level.
 
-Both arms run at the library default arena of 16 384 slots, which is derived from
-measured depth rather than chosen: a full day of QQQ peaks at 8 842 live orders and
-the default carries 1.85x headroom over it. Absolute figures come from paired runs,
-because this machine drifted by up to 2.6x across a session on an unchanged binary.
-The ratios survive that; the nanoseconds are one afternoon's reading.
+Both arms run at a 16 384 slot arena, matched to the roughly 8 192 live orders the
+benchmark holds. That is deliberately **not** the library default of 65 536:
+measuring 8 192 orders in a 2.5 MiB arena would report a DRAM latency rather than a
+property of the book.
+
+The default is larger because peak book depth varies 62-fold across mainstream
+symbols on one ordinary day, from IWM at 434 live orders to AAPL at 27 097, so it is
+sized to the deepest measured name. A book known to be shallow should lower it and
+take the speed. Both numbers, and what the difference costs, are in
+[BENCHMARKS.md](BENCHMARKS.md).
+
+Absolute figures come from paired runs, because this machine drifted by up to 2.6x
+across a session on an unchanged binary. The ratios survive that; the nanoseconds
+are one afternoon's reading.
 
 **Replaying a real NASDAQ capture**, per message end to end, on a pinned core with
 an invariance-verified TSC:
@@ -135,7 +144,7 @@ timestamps per message cost enough to change the answer by a factor of 3.5.
 | --- | --- |
 | `sizeof(Order)` | 40 bytes, 32-bit arena indices rather than pointers |
 | `sizeof(PriceLevel)` | 24 bytes, 2.67 levels per cache line |
-| Footprint at defaults | about 4.0 MiB: 3 MiB band, 16 KiB bitmaps, 0.63 MiB arena, 0.38 MiB id map |
+| Footprint at defaults | about 7.2 MiB: 3 MiB band, 16 KiB bitmaps, 2.5 MiB arena, 1.5 MiB id map |
 | Id map | load factor 0.50, mean probe count 1.0, lookup 2.3 ns |
 
 The same replay was run under GCC 16.1.0 on Windows and GCC 13.3.0 on Linux. Two

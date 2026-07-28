@@ -81,6 +81,41 @@ needs, plus every message for the chosen symbol, and drops the rest.
   return true;
 }
 
+// Numeric options are parsed defensively rather than with std::stoull, which
+// throws on garbage and terminates the tool with an unhandled exception. A typo in
+// a command line should print usage and exit, not abort. This mirrors the helpers
+// in tools/strategy_backtest.cpp so the two tools behave the same way.
+[[nodiscard]] bool parse_u64(const std::string& text, std::uint64_t& out) {
+  if (text.empty()) {
+    return false;
+  }
+  char* end = nullptr;
+  const unsigned long long value = std::strtoull(text.c_str(), &end, 10);
+  if (end == text.c_str() || end == nullptr || *end != '\0') {
+    return false;
+  }
+  out = static_cast<std::uint64_t>(value);
+  return true;
+}
+
+[[nodiscard]] bool parse_i64(const std::string& text, std::int64_t& out) {
+  if (text.empty()) {
+    return false;
+  }
+  char* end = nullptr;
+  const long long value = std::strtoll(text.c_str(), &end, 10);
+  if (end == text.c_str() || end == nullptr || *end != '\0') {
+    return false;
+  }
+  out = static_cast<std::int64_t>(value);
+  return true;
+}
+
+[[noreturn]] void bad_value(std::string_view name, const std::string& value) {
+  std::cerr << "invalid value for " << name << ": " << value << '\n';
+  std::exit(2);
+}
+
 struct SymbolActivity {
   std::string symbol;
   std::uint64_t messages = 0;
@@ -365,24 +400,41 @@ int main(int argc, char** argv) {
       extract_to = value;
       continue;
     }
+    std::uint64_t unsigned_value = 0;
     if (match_option(argument, "--top", index, argc, argv, value)) {
-      top = static_cast<std::size_t>(std::stoull(value));
+      if (!parse_u64(value, unsigned_value)) {
+        bad_value("--top", value);
+      }
+      top = static_cast<std::size_t>(unsigned_value);
       continue;
     }
     if (match_option(argument, "--arena", index, argc, argv, value)) {
-      arena = static_cast<std::uint32_t>(std::stoul(value));
+      if (!parse_u64(value, unsigned_value) || unsigned_value == 0) {
+        bad_value("--arena", value);
+      }
+      arena = static_cast<std::uint32_t>(unsigned_value);
       continue;
     }
     if (match_option(argument, "--cold", index, argc, argv, value)) {
-      cold = static_cast<std::size_t>(std::stoull(value));
+      if (!parse_u64(value, unsigned_value)) {
+        bad_value("--cold", value);
+      }
+      cold = static_cast<std::size_t>(unsigned_value);
       continue;
     }
     if (match_option(argument, "--limit", index, argc, argv, value)) {
-      limit = static_cast<std::size_t>(std::stoull(value));
+      if (!parse_u64(value, unsigned_value)) {
+        bad_value("--limit", value);
+      }
+      limit = static_cast<std::size_t>(unsigned_value);
       continue;
     }
     if (match_option(argument, "--tick", index, argc, argv, value)) {
-      tick_size = std::stoll(value);
+      std::int64_t signed_value = 0;
+      if (!parse_i64(value, signed_value) || signed_value <= 0) {
+        bad_value("--tick", value);
+      }
+      tick_size = signed_value;
       continue;
     }
 

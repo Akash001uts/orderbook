@@ -36,6 +36,10 @@ struct CrossedBookStats {
   std::uint64_t observations = 0;
   std::uint64_t crossed_observations = 0;
 
+  // Bid equal to ask. A different state from crossed, legal at several venues,
+  // and counted separately so it cannot inflate the crossed figure.
+  std::uint64_t locked_observations = 0;
+
   [[nodiscard]] double crossed_fraction() const {
     return observations == 0
                ? 0.0
@@ -47,6 +51,17 @@ struct BacktestConfig {
   std::string symbol = "QQQ";
   MarketMakerConfig maker;
   FeeSchedule fees;
+  // Deliberately larger than the library default of 16 384.
+  //
+  // The backtest is the one consumer that cannot use the derived default safely.
+  // That default is sized to one liquid ETF's measured peak, and this tool is
+  // routinely pointed at arbitrary symbols on arbitrary days through `--symbol`,
+  // where the peak is unknown before the run. Exhausting the arena mid-replay
+  // would silently truncate the venue book and quietly corrupt every P&L number
+  // downstream, which is far worse here than the cache cost of over-provisioning.
+  //
+  // The strategy itself adds at most two orders; this headroom is entirely for the
+  // replayed venue book.
   std::uint32_t arena_capacity = 1U << 17;
   std::uint64_t sharpe_sample_interval_ns = 1000ULL * 1000ULL * 1000ULL;
 
@@ -91,9 +106,21 @@ class Backtest {
 
   [[nodiscard]] std::uint64_t quotes_rejected() const noexcept { return quotes_rejected_; }
 
+  // Cancels that arrived after their target had already filled. Zero without
+  // latency; with it, the count of times the strategy was too slow to pull.
+  [[nodiscard]] std::uint64_t cancels_too_late() const noexcept { return cancels_too_late_; }
+
+  // Largest excursion beyond the configured position limit, in shares. Non-zero
+  // only when an in-flight quote landed and filled after the position had already
+  // reached the limit. See reconcile_side for why the race is kept.
+  [[nodiscard]] std::int64_t limit_overshoot_shares() const noexcept {
+    return limit_overshoot_shares_;
+  }
+
   void run(std::span<const std::byte> data) {
     static_cast<void>(itch::for_each_message(
         data, [this](const itch::MessageView& message) { on_message(message); }));
+    finalise();
   }
 
  private:
@@ -248,6 +275,25 @@ class Backtest {
     }
     if (!fills.empty()) {
       queue_.purge_filled();
+      observe_limit_overshoot();
+    }
+  }
+
+  // Records any excursion past the configured position limit. See reconcile_side:
+  // the limit is a decision-time check, so an in-flight quote can land and fill
+  // after the position has already reached it.
+  void observe_limit_overshoot() {
+    const std::int64_t limit = config_.maker.position_limit;
+    const std::int64_t position = pnl_.position();
+    std::int64_t excess = 0;
+    if (position > limit) {
+      excess = position - limit;
+    } else if (position < -limit) {
+      excess = -limit - position;
+    }
+
+    if (excess > limit_overshoot_shares_) {
+      limit_overshoot_shares_ = excess;
     }
   }
 
@@ -267,13 +313,28 @@ class Backtest {
     engine_.book().reduce_by_index(index, Quantity{fill.quantity});
   }
 
+  // Crossed means the bid is strictly above the ask. Bid equal to ask is a
+  // **locked** book, which is a different state and is counted separately.
+  //
+  // The distinction matters rather than being pedantry. A locked book is legal on
+  // several venues and arises naturally when the strategy joins the far side at
+  // the touch, whereas a crossed book cannot exist at a real venue at all. Folding
+  // locked into crossed inflated the statistic that exists specifically to bound
+  // how much the fill model's honesty is worth, which is the one number that
+  // should not be inflated.
   void observe_crossed(std::uint64_t timestamp) {
     ++crossed_.observations;
 
     const std::optional<Ticks> best_bid = engine_.book().best_bid();
     const std::optional<Ticks> best_ask = engine_.book().best_ask();
-    const bool crossed =
-        best_bid.has_value() && best_ask.has_value() && best_bid->raw() >= best_ask->raw();
+    const bool two_sided = best_bid.has_value() && best_ask.has_value();
+
+    const bool crossed = two_sided && best_bid->raw() > best_ask->raw();
+    const bool locked = two_sided && best_bid->raw() == best_ask->raw();
+
+    if (locked) {
+      ++crossed_.locked_observations;
+    }
 
     if (crossed) {
       ++crossed_.crossed_observations;
@@ -290,6 +351,20 @@ class Backtest {
     }
 
     was_crossed_ = crossed;
+    last_timestamp_ = timestamp;
+  }
+
+  // Closes an interval still open when the stream ends.
+  //
+  // Without this a replay that finishes crossed contributes its interval to the
+  // count but nothing to the duration, so the two figures disagree and the
+  // duration is quietly short. Rare, but it is the kind of end-of-stream omission
+  // that is invisible until someone reconciles the two columns.
+  void finalise() {
+    if (was_crossed_ && last_timestamp_ > crossed_since_) {
+      crossed_.total_ns += last_timestamp_ - crossed_since_;
+      was_crossed_ = false;
+    }
   }
 
   // The requote trigger, and it matters more than it looks.
@@ -354,6 +429,25 @@ class Backtest {
   // strategy has decided to pull is still resting, and still fillable, for the
   // whole window. Delaying only the placement would model a participant that can
   // retract instantly but not act instantly, which is backwards.
+  //
+  // **Two races come with this, and both are kept rather than engineered away,
+  // because a real participant has both.**
+  //
+  // The position limit is a decision-time check. `MarketMaker::desired` tests it
+  // against exposure as it stands when the quote is decided, so a bid decided at
+  // position 900 can land after a fill has already moved the position to 1 000,
+  // rest, fill, and settle at 1 100. Re-testing at landing was the alternative and
+  // was rejected: a venue does not re-underwrite an order that is already in
+  // flight, and modelling a control the strategy could not actually have would
+  // flatter it. The overshoot is measured instead and reported as
+  // `limit_overshoot_shares`, so the cost of the race is visible rather than
+  // assumed to be zero.
+  //
+  // An in-flight placement also carries the price decided a window earlier, even
+  // if the desired price has moved since. It is not re-decided at landing, which
+  // models an order that cannot be amended while unacknowledged. Post-only turns
+  // the worst case into a rejection rather than a cross, and the in-flight flag
+  // stops a corrected duplicate queueing behind it.
   //
   // The measured effect is not the one predicted before running it, which is
   // worth recording. The expectation was that fills would fall as latency grew,
@@ -455,7 +549,16 @@ class Backtest {
     return std::nullopt;
   }
 
+  // A cancel that lands after its target has already filled is counted
+  // separately rather than as a cancel.
+  //
+  // With latency on it is not an error, it is the measurement: it counts the times
+  // the strategy decided to pull a quote and the market got there first. Counting
+  // it as a cancel would also stop the placed, cancelled and rejected totals
+  // reconciling against fills, which is how the discrepancy was noticed.
   void cancel(OrderId id) {
+    const bool still_resting = engine_.book().find_order(id) != INVALID_INDEX;
+
     Command command;
     command.id = id;
     command.type = CommandType::cancel;
@@ -464,7 +567,12 @@ class Backtest {
     NullSink sink;
     engine_.submit(command, sink);
     queue_.on_cancel(id);
-    ++quotes_cancelled_;
+
+    if (still_resting) {
+      ++quotes_cancelled_;
+    } else {
+      ++cancels_too_late_;
+    }
   }
 
   void place(Side side, Ticks price, std::uint64_t timestamp) {
@@ -524,6 +632,14 @@ class Backtest {
   std::uint64_t quotes_placed_ = 0;
   std::uint64_t quotes_cancelled_ = 0;
   std::uint64_t quotes_rejected_ = 0;
+  std::uint64_t cancels_too_late_ = 0;
+  std::int64_t limit_overshoot_shares_ = 0;
+
+  // Timestamp of the most recent message, needed only so `finalise` can close a
+  // crossed interval that is still open when the stream ends. It was removed once
+  // as dead code, correctly at the time, and is back because that end-of-stream
+  // case turned out to be a real omission rather than an unused field.
+  std::uint64_t last_timestamp_ = 0;
 
   std::uint64_t crossed_since_ = 0;
   bool was_crossed_ = false;

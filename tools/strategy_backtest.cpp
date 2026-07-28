@@ -204,6 +204,11 @@ void report(const Backtest<>& backtest) {
   std::cout << "  Quotes placed     " << backtest.quotes_placed() << ", cancelled "
             << backtest.quotes_cancelled() << ", post-only rejected " << backtest.quotes_rejected()
             << "\n";
+  std::cout << "  Cancels too late  " << backtest.cancels_too_late()
+            << ", the quote had already filled when the cancel landed\n";
+  std::cout << "  Limit overshoot   " << backtest.limit_overshoot_shares()
+            << " shares beyond the position limit, from quotes in flight when it "
+            << "was reached\n";
   std::cout << "  Fill ratio        " << std::fixed << std::setprecision(4) << pnl.fill_ratio()
             << std::defaultfloat << " of quoted shares\n";
   std::cout << "  Sharpe            " << std::fixed << std::setprecision(3) << pnl.sharpe()
@@ -238,6 +243,8 @@ void report(const Backtest<>& backtest) {
 
   std::cout << "\nCrossed book, the honesty check\n";
   std::cout << "  Crossed intervals " << crossed.intervals << "\n";
+  std::cout << "  Locked, not crossed " << crossed.locked_observations
+            << " observations with bid equal to ask, counted separately\n";
   std::cout << "  Crossed time      " << (crossed.total_ns / 1000000ULL) << " ms\n";
   std::cout << "  Observations      " << std::fixed << std::setprecision(4)
             << (crossed.crossed_fraction() * 100.0) << " % of book updates" << std::defaultfloat
@@ -285,7 +292,11 @@ void run_latency_sweep(std::span<const std::byte> data, const Options& options) 
             << "The 1 s markout is what those extra fills are worth, and it falls as latency\n"
             << "rises. That is adverse selection appearing exactly where theory says it\n"
             << "should: the trades you cannot pull away from are disproportionately the ones\n"
-            << "you would most have wanted to.\n";
+            << "you would most have wanted to.\n\n"
+            << "Total P&L is not monotonic in latency and should not be read as if it were.\n"
+            << "It is dominated by inventory, which is path dependent: which fills land in\n"
+            << "which order decides the position carried through the session, and that\n"
+            << "wobbles rather than trends as the window widens.\n";
 }
 
 void run_sweep(std::span<const std::byte> data, const Options& options) {

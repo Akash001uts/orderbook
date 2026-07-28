@@ -231,8 +231,13 @@ Crossed time also rises by an order of magnitude, 0.014 percent to 0.122, which 
 the same phenomenon seen from the book's side: stale quotes sit inside the real
 spread for longer.
 
-Total P&L barely moves, because inventory dominates everything at this
-configuration and swamps both effects.
+Total P&L barely moves and is **not monotonic** in latency: 500 us shows -50 221
+against -47 715 at 100 us and -47 021 at 1 ms. That is not noise in the
+measurement and it is not an effect of latency being good at one setting. Total
+P&L here is dominated by inventory, which is path dependent: which fills land in
+which order decides the position carried through the session, so the column wobbles
+rather than trends as the window widens. The fill count and the markout are the
+columns that move monotonically, and they are the ones the sweep is for.
 
 ## Sensitivity analysis
 
@@ -282,16 +287,34 @@ reconstructed book is sometimes crossed. That is measured, not tolerated silentl
 
 | | Baseline |
 | --- | --- |
-| Crossed intervals | 26 |
-| Total crossed time | 879 ms |
-| Fraction of book updates crossed | 0.0141 % |
+| Crossed intervals | 18 |
+| Total crossed time | 18 ms |
+| Fraction of book updates crossed | 0.0098 % |
 | Worst crossing depth | 26 ticks |
+| Locked, counted separately | 8 observations |
+
+**These figures replace larger ones, and the correction matters because it went the
+flattering way.** An earlier version counted bid equal to ask as crossed. A locked
+book is a different state, legal at several venues, and it arises naturally when
+the strategy joins the far touch. Folding it in reported 26 intervals and 879 ms
+against an actual 18 and 18 ms, so the crossed duration was overstated by a factor
+of 48.
+
+The reason the duration moved so much further than the interval count is that
+locked states are the persistent ones. A genuinely crossed book resolves almost
+immediately, because a venue add priced through a resting quote is followed by
+trading; a locked book can sit. Averaging the two together produced a statistic
+dominated by the state that is not a problem.
+
+Inflating this particular number was the wrong direction to be wrong in. It exists
+to bound how much the fill model's honesty costs, so an inflated value made the
+refusal to fill on crossing adds look more expensive than it is.
 
 A crossed interval is time the strategy's quote sat inside the real spread with
 nobody trading against it. It is exactly where an optimistic backtest would hide
 its optimism, so counting it converts an unfalsifiable assumption into a number a
-reader can check. At 0.014 percent of updates and under a second in total, this
-result does not depend materially on the assumption. **A configuration that spent a
+reader can check. At 0.0098 percent of updates and 18 ms in total, this result
+does not depend materially on the assumption. **A configuration that spent a
 large fraction of its time crossed would be one whose P&L should not be quoted**,
 and the sweep reports the figure for every cell so that can be checked rather than
 assumed.

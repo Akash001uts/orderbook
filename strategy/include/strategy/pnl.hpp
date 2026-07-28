@@ -88,7 +88,15 @@ class PnlAccount {
  public:
   explicit PnlAccount(FeeSchedule fees) : fees_(fees) {}
 
-  // Called on every book update, before any fill for that update is booked.
+  // Called on every book update.
+  //
+  // Ordering note, because the comment here used to claim the opposite. The
+  // backtest books fills for a message **before** calling this, so the mid a fill
+  // is priced against is the one from the previous update rather than the one
+  // being installed now. That is deliberate: the fill is inferred from a venue
+  // event that has just been applied, so the mid prevailing when it happened is
+  // the earlier one. Marking first would price every fill against a mid that
+  // already includes the trade that caused it.
   void mark(double mid, std::uint64_t timestamp_ns) {
     if (has_mark_) {
       inventory_pnl_ += static_cast<double>(position_) * (mid - mid_);

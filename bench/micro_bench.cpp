@@ -58,14 +58,18 @@ using ob::Timestamp;
 using BenchBook = Book<DEFAULT_BAND_LEVELS>;
 using BenchEngine = Engine<CancelNewest, DEFAULT_BAND_LEVELS>;
 
-// The library default, so these figures describe the configuration that actually
-// ships rather than one chosen for the benchmark.
+// Deliberately not the library default, which is 65 536.
 //
-// It is derived from measured depth: a full day of QQQ peaks at 8 842 live orders,
-// so this carries 1.85x headroom. Going higher crosses an id map bucket boundary
-// and costs 13 percent on every add, which is why it stops here. See the Config
-// comment in book.hpp for that and for why capacity leads and cache residency
-// follows.
+// The default is sized so a caller who does not know their symbol's depth cannot
+// lose orders: AAPL peaks at 27 097 live orders on an ordinary day. These
+// benchmarks hold about 8 192 live orders, so running them at the default would
+// measure a mostly empty 2.5 MiB arena, which is the DRAM-latency trap this file
+// has already fallen into once. 16 384 is matched to the workload instead.
+//
+// The gap between the two is measured rather than hidden: bm_add_by_arena_size
+// below sweeps the parameter and BENCHMARKS.md publishes the curve in two machine
+// states, where the difference between 16 384 and 65 536 runs from 5 to 35
+// percent depending on load.
 //
 // This file has now had the number wrong in both directions, which is why the
 // sweep below exists. The first version used a 2^20 slot arena, putting 40 MiB of

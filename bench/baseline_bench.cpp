@@ -69,14 +69,15 @@ using ob::testing::ReferenceBook;
 using FlatEngine = Engine<CancelNewest, DEFAULT_BAND_LEVELS>;
 using NaiveBook = ReferenceBook<CancelNewest>;
 
-// 8 192 live orders against the library default arena of 16 384.
+// 8 192 live orders against a 16 384 slot arena, which is matched to the workload
+// rather than to the library default of 65 536.
 //
-// Both numbers are derived rather than round. The arena is the shipped default, so
-// these figures describe the configuration that ships. The order count is close to
-// the 8 842 peak that a full day of QQQ actually reaches, and comfortably below the
-// arena, so no arm ends up measuring the rebuild path instead of the operation.
-// Levels are spread wide enough that neither implementation degenerates into a
-// single hot level.
+// The default is sized for the deepest mainstream symbol measured, AAPL at 27 097
+// live orders, so a caller who does not know their depth cannot lose orders.
+// Measuring at the default would put 8 192 orders in a 2.5 MiB arena and report a
+// DRAM latency rather than a property of the book. The order count itself is close
+// to QQQ's real 8 842 peak, and levels are spread wide enough that neither
+// implementation degenerates into a single hot level.
 constexpr std::uint32_t BASELINE_ORDERS = 8192;
 constexpr std::int32_t BASELINE_LEVELS = 512;
 constexpr std::uint32_t ARENA_CAPACITY = 16384;

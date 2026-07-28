@@ -139,6 +139,30 @@ feeding the same engine as the replay path, which is the one relationship a read
 has to understand. A rendered image would look better and say the same thing while
 being invisible to every tool this project is read with.
 
+## Next work: the frontend
+
+Accepted from the third review, not started. The sequencing matters more than the
+choice of framework.
+
+**1. Machine-readable output first.** `itch_replay`, `ob_strategy_backtest` and
+`ob_latency_bench` all print human-formatted text, and this repository changes its
+wording deliberately and often. A frontend that scrapes stdout would break on the
+next edit. Each tool needs a `--json` flag emitting a stable schema; the structs
+already exist, `ReplayStats`, `PnlAccount`'s accessors, `CrossedBookStats`, and the
+sweep rows.
+
+**2. Static charts second.** Everything this project produces is a static result of
+a deterministic replay: benchmark tables, sweep grids, markout curves, crossed-book
+statistics. A static site rendering committed JSON covers essentially the full
+value, needs no C++ toolchain to view, and sidesteps every question about running
+native code behind a web server.
+
+**3. WebAssembly only if an interactive demo earns its cost.** A live "submit an
+order, watch the book" demo needs the engine compiled to WASM or a backend service,
+which is a different and much larger project. The band, arena and event ring would
+compile without change, since there are no threads and no syscalls on the hot path,
+so the door stays open rather than being taken now.
+
 ## CI budget policy
 
 The differential test's command budget is set by `OB_DIFF_COMMANDS` in

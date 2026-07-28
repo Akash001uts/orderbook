@@ -588,18 +588,43 @@ spans 94 ticks.
 levels across a full day says the band is comfortable rather than marginal, and 7.9
 percent utilisation says comfortable by a wide margin. The band is left at 65 536.
 
-**The arena default has been changed from 65 536 to 16 384 slots.** 16 384 carries
-1.85x headroom over the measured 8 842 peak. Capacity leads and cache residency
-follows, for the reasons in DESIGN.md: too small is a rejected order, too large is
-only a slowdown.
+**The arena default is 65 536, and getting there took two attempts that are both
+worth recording.**
 
-18 432 was tried first, because it is the smallest multiple of 1024 giving a round
-2x headroom, and then reverted. The id map rounds its capacity to a power of two at
-or above twice the arena, so 16 384 sits in the 32 768 slot bucket while 18 432
-jumps to 65 536. The last 2 048 slots of headroom double the id map. **The cost of
-headroom here is a step function rather than a slope**, and 16 384 is on the cheap
-side of the step, which makes it the efficient point rather than merely a smaller
-one.
+The first derived it from QQQ alone, giving 16 384 at 1.85x headroom over that
+symbol's 8 842 peak. Widening the evidence to five of the busiest names on the same
+ordinary session showed that was wrong:
+
+| Symbol | Peak live orders | Headroom at 16 384 |
+| --- | --- | --- |
+| IWM | 434 | 37x |
+| SPY | 1 942 | 8.4x |
+| QQQ | 8 842 | 1.85x |
+| AMD | 11 605 | 1.41x |
+| **AAPL** | **27 097** | **exceeds it by 65 percent** |
+
+**Peak depth varies by a factor of 62 across five mainstream symbols on one day.**
+A default derived from any single one of them is a default fitted to that symbol.
+16 384 would have rejected orders on AAPL, and `arena_exhausted` truncates the book
+being reconstructed, which corrupts every number downstream of it.
+
+65 536 covers the deepest measured name with 2.4x headroom. It is the value this
+started with, so the arena work ends where it began, but not with what it began
+with: the number is now the smallest power of two covering a measured worst case,
+with the sample it rests on published above and the cost of the choice measured
+below.
+
+**The cost is real and the guidance follows from it.** 65 536 orders is roughly
+4.2 MiB of working set, which does not fit the 2.5 MiB L2 of the measurement
+machine, and the curve below prices that at 5 to 35 percent on an add depending on
+machine load. **A book known to be ETF-shaped should lower the arena to 16 384 and
+take the speed.** The default is sized so that a caller who does not know their
+symbol's depth gets correct behaviour rather than fast behaviour.
+
+The benchmarks in this document run at 16 384 with about 8 192 live orders, matched
+to their workload rather than to the default. Measuring 8 192 orders in a 2.5 MiB
+arena would report a DRAM latency rather than a property of the book, which is a
+trap this repository has already fallen into once.
 
 ### The arena curve, and why it is published twice
 

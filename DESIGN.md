@@ -389,6 +389,19 @@ per bottom tier word, and a single top word. Best price is a `countr_zero` or
 3. **A tree or heap keyed by price.** O(log n) with pointer chasing and
    allocation, which is the design this project exists to beat.
 
+**Alternative 2 was rejected as a replacement and later adopted as a complement**,
+which is worth stating here rather than leaving this section reading as though the
+bitmap won outright. Phase 4 measured the descent losing this query to a
+`std::map`, which caches its extreme element, and Phase 6 added exactly the cache
+described above.
+
+The two are not alternatives after all. What made caching unattractive on its own
+was the repair: an unaided cache needs the unbounded scan when the best level
+empties. The bitmap is what makes that repair cheap and bounded, so it is the
+reason the cache is affordable. Every concern listed above is still real, and the
+second source of truth is now an explicit invariant guarded by six dedicated tests
+and the differential comparison. See the `best` member in `book.hpp`.
+
 **Reasoning.** Three dependent loads and three single cycle instructions, and the
 cost does not depend on how far apart the occupied levels are. At the default band
 the whole structure is 8 KiB per side, so it stays resident.
@@ -454,8 +467,8 @@ caller could handle.
 
 ## Arena capacity is a capacity decision, then a cache decision
 
-**Decision.** The default is 16 384 slots, derived from measured book depth. It was
-65 536 and the change is recent.
+**Decision.** The default is 65 536 slots, derived from measured book depth across
+five symbols.
 
 **Why capacity has to lead.** The two constraints fail in different ways. Too small
 and `add` returns `arena_exhausted`, a rejected order: visible, semantic, and a
@@ -463,9 +476,14 @@ hard failure. Too large and everything slows down, which is a factor rather than
 failure. A number chosen for cache residency that cannot hold the book is simply
 wrong, so depth sets it and cache residency is checked afterwards.
 
-**The derivation.** Replaying the full 2019-12-30 capture for QQQ peaks at 8 842
-live orders, reported by `itch_replay` so it is reproducible. 16 384 carries 1.85x
-headroom over that, and the next step up is expensive for reasons below.
+**The derivation, which took two attempts.** `itch_replay` reports peak live
+orders. Derived from QQQ alone, the answer was 16 384 at 1.85x headroom over its
+8 842 peak. Widening to five of the busiest names on the same day showed that
+wrong: IWM peaks at 434, SPY at 1 942, QQQ at 8 842, AMD at 11 605 and **AAPL at
+27 097**. Peak depth varies 62-fold across mainstream symbols on one ordinary
+session, so a default derived from one of them is fitted to that one. 16 384 would
+have rejected orders on AAPL. 65 536 covers the deepest measured name with 2.4x
+headroom.
 
 **The cost, checked rather than assumed, and smaller at the near end than it
 looks.** Each order is 40 bytes of arena plus about 24 of id map at the design load
@@ -477,14 +495,18 @@ smaller is never worse, but this is a cache pressure effect and what cache press
 costs depends on what else is competing. The far end is unambiguous either way: a
 2^20 arena costs four to eight times a resident one.
 
-**One thing the derivation exposed that a round number would have hidden.** The id
-map rounds its capacity up to a power of two at or above twice the arena, so 16 384
-sits in the 32 768 slot bucket while 18 432 jumps to 65 536. The last 2 048 slots of
-headroom therefore double the id map. 18 432 was tried, for the round 2x headroom,
-and reverted: the cost of headroom here is a step function rather than a slope, and
-16 384 is on the cheap side of the step. How large the step is depends on machine
-state, 3 percent quiet against 13 percent loaded, which is itself the reason the
-sweep is published twice in BENCHMARKS.md.
+**Two things the derivation exposed that a round number would have hidden.**
+
+The id map rounds its capacity up to a power of two at or above twice the arena, so
+the cost of headroom is a step function rather than a slope. 18 432 was tried, for a
+round 2x headroom over QQQ, and reverted for that reason.
+
+More importantly, **a default derived from one symbol is fitted to that symbol.**
+Nothing about the arithmetic said so; only measuring a second, third and fourth name
+did. The value ended back at 65 536, where it started, which is the honest outcome
+rather than a wasted exercise: what changed is that it is now the smallest power of
+two covering a measured worst case, with the sample published, rather than a round
+number with a plausible story.
 
 **Not derived from the running machine's cache**, which is the obvious next step
 and is wrong. Capacity decides whether an order is accepted, so sizing it from

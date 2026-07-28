@@ -147,51 +147,50 @@ class Book {
   //
   // **Capacity has to lead, because the two constraints fail differently.** Too
   // small and `add` returns `arena_exhausted`, which is a rejected order: visible,
-  // semantic, and a hard failure. Too large and every operation slows down, which
-  // is a factor rather than a failure. So the default is derived from how many
-  // orders a real book actually holds, and cache residency is checked afterwards
-  // as a consequence.
+  // semantic, and a hard failure that truncates the book being reconstructed. Too
+  // large and every operation slows down, which is a factor rather than a failure.
   //
-  // **The derivation.** Replaying the full 2019-12-30 NASDAQ capture for QQQ, an
-  // ordinary liquid ETF, peaks at 8 842 live orders. `itch_replay` reports this,
-  // so it is reproducible rather than asserted. 16 384 carries 1.85x headroom over
-  // that.
+  // **The derivation, and it took two attempts.** `itch_replay` reports peak live
+  // orders, so this is measured rather than asserted. Across five of the busiest
+  // symbols on 2019-12-30, an ordinary session:
   //
-  // **Why not more.** The id map rounds its capacity to a power of two at or above
-  // twice the arena, so 16 384 sits in the 32 768 slot bucket while anything above
-  // it jumps to 65 536. Going to 18 432 for a round 2x headroom would double the id
-  // map to buy 2 048 slots. The cost of headroom here is a step function rather than
-  // a slope, and this sits on the cheap side of the step, so it is the efficient
-  // point rather than merely a smaller one.
+  //     IWM      434
+  //     SPY    1 942
+  //     QQQ    8 842
+  //     AMD   11 605
+  //     AAPL  27 097
   //
-  // **The consequence, checked not assumed, and it is smaller than it looks.** Each
-  // order costs 40 bytes of arena plus about 24 of id map at the design load factor,
-  // so 16 384 orders is roughly 1.0 MiB of working set, inside the 2.5 MiB L2 of the
-  // machine the benchmarks were taken on.
+  // The first attempt derived the default from QQQ alone and produced 16 384. That
+  // is wrong, and the spread above is why: peak depth varies by a factor of 62
+  // across five mainstream names on the same day, and 16 384 would have rejected
+  // orders on AAPL and left AMD at 1.41x headroom. A default that breaks on the
+  // most traded stock in the market is not a default.
   //
-  // How much that is worth depends on the machine's state, which is worth stating
-  // because a single figure here would be misleading. The arena sweep was run twice.
-  // On a quiet machine 16 384 measures 15.4 ns against 16.2 at the old 65 536
-  // default, a 5 percent difference. On a loaded one the same comparison is 20.0
-  // against 26.9, a 35 percent difference. The ordering never changes and smaller is
-  // never worse, but this is cache pressure, and how much cache pressure costs
-  // depends on what else is competing for the cache. The far end of the curve is
-  // unambiguous in both: 2^20 slots costs four to eight times a resident arena.
+  // 65 536 covers the deepest measured name with 2.4x headroom. It is the value
+  // this started with, but it is no longer a round number with a story attached:
+  // it is the smallest power of two that covers a measured worst case with room
+  // for a busier day than the one sampled.
   //
-  // **This is deliberately not derived from the running machine's cache**, which
-  // is the obvious next step and is wrong. Capacity decides whether an order is
-  // accepted, so sizing it from detected hardware would make `arena_exhausted`
-  // depend on which machine the code runs on. The determinism claim this whole
-  // project rests on, that the same command sequence produces byte identical
-  // state, would quietly weaken to "on the same machine". A fixed constant keeps
-  // the failure threshold portable; the cache figure above is an observation about
-  // one host, not an input.
+  // **The cost, stated plainly.** Each order is 40 bytes of arena plus about 24 of
+  // id map at the design load factor, so 65 536 orders is roughly 4.2 MiB, which
+  // does not fit the 2.5 MiB L2 of the measurement machine. The arena sweep in
+  // BENCHMARKS.md measures what that costs: between 5 and 35 percent on an add
+  // against a 16 384 slot arena, depending on how loaded the machine is.
   //
-  // A book expecting materially more depth than a liquid ETF should raise this
-  // explicitly rather than rely on the default.
+  // **So lower it when the symbol allows.** A book known to be ETF-shaped runs
+  // comfortably at 16 384 and is measurably faster for it. The default is sized so
+  // that a caller who does not know their symbol's depth gets correct behaviour
+  // rather than fast behaviour, because the failure mode of the other choice is
+  // lost orders.
+  //
+  // **Not derived from the running machine's cache**, which is the obvious next
+  // step and is wrong. Capacity decides whether an order is accepted, so sizing it
+  // from detected hardware would make `arena_exhausted` depend on the machine, and
+  // the determinism claim this project rests on would weaken from "the same command
+  // sequence produces byte identical state" to "on the same machine".
   struct Config {
     PriceConfig price{};
-    std::uint32_t arena_capacity = 16384;
+    std::uint32_t arena_capacity = 65536;
     std::size_t max_cold_levels_per_side = 4096;
     Ticks initial_center{0};
   };
