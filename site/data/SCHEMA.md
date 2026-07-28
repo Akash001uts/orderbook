@@ -76,6 +76,7 @@ without their conditions.
 | `rejections.unknown_order_references` | Reductions naming an order the book does not hold. A small count is expected at the start of a file, since the session began before the capture did. |
 | `book.*` | End of replay state: resting orders, occupied levels per side, band rebases, abandoned rebases, cold levels, cold operations. |
 | `sizing.peak_live_orders` | The high water mark. |
+| `sizing.peak_live_orders_at_message` | Which message the peak happened on, which is what `--depth-at-peak` anchors the ladder to. |
 | `sizing.arena_capacity` | What this run allocated. |
 | `sizing.library_arena_default` | The library default, which is what the sizing story is about. `itch_replay` runs a larger arena on purpose because it is pointed at symbols whose depth is unknown before the run. |
 | `sizing.peak_occupied_levels` | Both sides summed. |
@@ -85,12 +86,23 @@ without their conditions.
 
 ## `depth.json`, from `itch_replay --json-depth`
 
-The end of replay ladder, a separate file so that no number has two homes.
+A ladder snapshot, a separate file so that no number has two homes.
+
+**Not the end of replay.** A full trading day closes with the book emptied by the
+session close, so an end of replay ladder over a whole day is correct and shows
+nothing. Every ladder here is taken with `--depth-at-peak`, at the message where
+the live order count reached its high water mark. That anchors it to the deepest
+moment of the session rather than to an arbitrary offset, and it is the same moment
+the sizing block reports.
 
 | Field | Meaning |
 | --- | --- |
 | `levels_per_side` | How many levels were requested. Arrays may be shorter. |
-| `occupied_bid_levels`, `occupied_ask_levels` | Totals across the whole book, not just the levels listed. |
+| `captured_at_message` | Which message the snapshot was taken after. |
+| `captured_at_peak_depth` | Whether that message was the live order count peak. |
+| `live_orders_at_capture` | Live orders at that moment. |
+| `bid_tick`, `bid_price`, `ask_tick`, `ask_price` | The touch at that moment. Null when that side was empty. |
+| `occupied_bid_levels`, `occupied_ask_levels` | Totals across the whole book at that moment, not just the levels listed. |
 | `bids`, `asks` | Arrays ordered from the touch outward: bids descending, asks ascending. |
 | `bids[].tick`, `.price` | Tick index and scaled price. |
 | `bids[].quantity` | Aggregate resting quantity at that level. |
@@ -192,9 +204,10 @@ before any detail file loads.
 | `symbols[].messages_applied` | Messages applied to that symbol's book. |
 | `symbols[].peak_live_orders` | High water mark of live orders. |
 | `symbols[].library_arena_default` | For the headroom comparison. |
-| `symbols[].final_bid_price`, `final_ask_price` | Scaled prices, null when a side was empty. |
+| `symbols[].bid_price`, `ask_price` | The touch from `depth.json`, so at the deepest moment rather than at the close. A full day's final touch is null for every symbol, which is correct and useless in a summary line. |
 | `symbols[].price_scale` | Scaled units per dollar, so a reader does not have to assume. |
+| `symbols[].touch_span_ticks` | How far the touch travelled across the replay. |
 | `symbols[].baseline_total_pnl` | From `backtest.json`. |
 | `symbols[].fills` | From `backtest.json`. |
-| `symbols[].off_tick_prices`, `rebases`, `cold_levels` | The cross symbol variation the site is there to show. |
+| `symbols[].off_tick_prices`, `rejected_adds`, `rebases`, `cold_levels` | The cross symbol variation the site is there to show. A non-zero `rejected_adds` would invalidate every other number for that symbol. |
 | `symbols[].reproducible_in_ci` | From `source.json`. |

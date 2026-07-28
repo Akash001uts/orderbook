@@ -59,8 +59,10 @@ void print_usage() {
   --tick N          tick size in scaled units, 100 is a penny (default 100)
   --extract FILE    write only this symbol's messages to FILE, as valid ITCH
   --json FILE       also write the replay result to FILE as JSON
-  --json-depth FILE also write the end of replay depth ladder to FILE as JSON
+  --json-depth FILE also write a depth ladder snapshot to FILE as JSON
   --depth-levels N  levels per side in the depth ladder (default 20)
+  --depth-at N      snapshot the ladder after N messages instead of at the end
+  --depth-at-peak   snapshot the ladder at the deepest moment of the replay
   --sha256 HEX      record this hash of the input in the JSON provenance block
 
 --extract is how a multi-gigabyte capture becomes a test fixture small enough to
@@ -70,6 +72,12 @@ needs, plus every message for the chosen symbol, and drops the rest.
 --json exists because the results site reads these numbers, and stdout is not an
 interface: this repository rewords its output deliberately and often, so anything
 that scraped it would break on an edit that changed no behaviour.
+
+--depth-at-peak exists because a full trading day ends with an empty book. The
+session close deletes everything, so an end of replay ladder over a whole day is
+correct and shows nothing. Snapshotting where the book was deepest gives a ladder
+worth looking at and anchors it to something meaningful rather than to an
+arbitrary offset. --depth-at names an explicit message index instead.
 )";
 }
 
@@ -270,6 +278,23 @@ struct ReplayOptions {
   std::string json_path;
   std::string depth_path;
   std::size_t depth_levels = 20;
+  std::size_t depth_at = 0;
+  bool depth_at_peak = false;
+};
+
+// One side of the ladder, captured at a chosen moment rather than read off the book
+// at the end. A full trading day closes with everything deleted, so the end state
+// is an empty book: correct, and useless as an illustration of book shape.
+struct Ladder {
+  std::vector<ReplayBook::LevelSnapshot> bids;
+  std::vector<ReplayBook::LevelSnapshot> asks;
+  std::size_t at_message = 0;
+  std::size_t live_orders = 0;
+  std::size_t occupied_bid_levels = 0;
+  std::size_t occupied_ask_levels = 0;
+  std::optional<ob::Ticks> bid;
+  std::optional<ob::Ticks> ask;
+  bool at_peak_depth = false;
 };
 
 // What the replay observed, separated from how it is reported. The text block and
@@ -277,10 +302,12 @@ struct ReplayOptions {
 // disagree about a number the way two independent print paths would.
 struct ReplayOutcome {
   std::size_t peak_live_orders = 0;
+  std::size_t peak_live_orders_at_message = 0;
   std::size_t peak_occupied_levels = 0;
   std::int32_t lowest_tick = 0;
   std::int32_t highest_tick = 0;
   bool touch_seen = false;
+  Ladder ladder;
 };
 
 // Binary rather than text, which is not an optimisation. On Windows a text mode
@@ -296,23 +323,29 @@ struct ReplayOutcome {
   return file;
 }
 
-// The top levels of one side, nearest the touch first. snapshot_levels returns a
-// side ascending by price, so bids need reversing and asks do not: the level
-// closest to the touch is the highest bid and the lowest ask.
-void write_ladder(ob::json::Writer& writer,
-                  const ReplayBook& book,
-                  ob::Side side,
-                  std::size_t levels) {
-  std::vector<ReplayBook::LevelSnapshot> all;
-  book.snapshot_levels(side, all);
+// Captures both sides of the ladder from the book as it stands right now.
+// snapshot_levels returns a side ascending by price, so bids are reversed and asks
+// are not: nearest the touch means the highest bid and the lowest ask.
+void capture_ladder(Ladder& ladder, const ReplayBook& book, std::size_t at_message) {
+  book.snapshot_levels(ob::Side::buy, ladder.bids);
+  std::ranges::reverse(ladder.bids);
+  book.snapshot_levels(ob::Side::sell, ladder.asks);
 
-  if (side == ob::Side::buy) {
-    std::ranges::reverse(all);
-  }
+  ladder.at_message = at_message;
+  ladder.live_orders = book.pool().live_count();
+  ladder.occupied_bid_levels = book.occupied_level_count(ob::Side::buy);
+  ladder.occupied_ask_levels = book.occupied_level_count(ob::Side::sell);
+  ladder.bid = book.best_bid();
+  ladder.ask = book.best_ask();
+}
 
+void write_side(ob::json::Writer& writer,
+                const ReplayBook& book,
+                const std::vector<ReplayBook::LevelSnapshot>& levels,
+                std::size_t limit) {
   writer.begin_array();
-  for (std::size_t index = 0; index < all.size() && index < levels; ++index) {
-    const ReplayBook::LevelSnapshot& level = all[index];
+  for (std::size_t index = 0; index < levels.size() && index < limit; ++index) {
+    const ReplayBook::LevelSnapshot& level = levels[index];
     writer.begin_object();
     writer.field("tick", level.price.raw());
     writer.field("price", book.price_config().to_price(level.price).raw());
@@ -321,30 +354,6 @@ void write_ladder(ob::json::Writer& writer,
     writer.end_object();
   }
   writer.end_array();
-}
-
-void write_depth_json(const ReplayOptions& options,
-                      const ob::json::Provenance& provenance,
-                      const ReplayBook& book) {
-  std::ofstream file = open_output(options.depth_path);
-  ob::json::Writer writer(file);
-
-  writer.begin_object();
-  ob::json::write_header(writer, provenance);
-  writer.field("symbol", options.symbol);
-  writer.field("levels_per_side", options.depth_levels);
-  writer.field("price_scale", static_cast<std::int64_t>(ob::itch::PRICE_SCALE));
-  writer.field("tick_size", options.tick_size);
-  writer.field("occupied_bid_levels", book.occupied_level_count(ob::Side::buy));
-  writer.field("occupied_ask_levels", book.occupied_level_count(ob::Side::sell));
-
-  writer.key("bids");
-  write_ladder(writer, book, ob::Side::buy, options.depth_levels);
-  writer.key("asks");
-  write_ladder(writer, book, ob::Side::sell, options.depth_levels);
-
-  writer.end_object();
-  writer.finish();
 }
 
 void write_touch(ob::json::Writer& writer,
@@ -359,6 +368,40 @@ void write_touch(ob::json::Writer& writer,
   }
   writer.field(tick_key, price->raw());
   writer.field(price_key, book.price_config().to_price(*price).raw());
+}
+
+void write_depth_json(const ReplayOptions& options,
+                      const ob::json::Provenance& provenance,
+                      const ReplayBook& book,
+                      const Ladder& ladder) {
+  std::ofstream file = open_output(options.depth_path);
+  ob::json::Writer writer(file);
+
+  writer.begin_object();
+  ob::json::write_header(writer, provenance);
+  writer.field("symbol", options.symbol);
+  writer.field("levels_per_side", options.depth_levels);
+  writer.field("price_scale", static_cast<std::int64_t>(ob::itch::PRICE_SCALE));
+  writer.field("tick_size", options.tick_size);
+
+  // When the snapshot was taken, and whether that was the deepest moment of the
+  // replay. A consumer that assumed end of replay would draw an empty ladder for
+  // any full trading day, and be right to.
+  writer.field("captured_at_message", ladder.at_message);
+  writer.field("captured_at_peak_depth", ladder.at_peak_depth);
+  writer.field("live_orders_at_capture", ladder.live_orders);
+  writer.field("occupied_bid_levels", ladder.occupied_bid_levels);
+  writer.field("occupied_ask_levels", ladder.occupied_ask_levels);
+  write_touch(writer, book, "bid_tick", "bid_price", ladder.bid);
+  write_touch(writer, book, "ask_tick", "ask_price", ladder.ask);
+
+  writer.key("bids");
+  write_side(writer, book, ladder.bids, options.depth_levels);
+  writer.key("asks");
+  write_side(writer, book, ladder.asks, options.depth_levels);
+
+  writer.end_object();
+  writer.finish();
 }
 
 void write_replay_json(const ReplayOptions& options,
@@ -440,6 +483,9 @@ void write_replay_json(const ReplayOptions& options,
   writer.key("sizing");
   writer.begin_object();
   writer.field("peak_live_orders", outcome.peak_live_orders);
+  // Where in the stream the peak happened, which is what --depth-at needs to
+  // snapshot the ladder at the deepest moment rather than at an empty close.
+  writer.field("peak_live_orders_at_message", outcome.peak_live_orders_at_message);
   writer.field("arena_capacity", book.pool().capacity());
   // The library's own default, which is the number the sizing story is about. This
   // tool runs a deliberately larger arena because it is pointed at arbitrary
@@ -501,6 +547,7 @@ void replay_symbol(std::span<const std::byte> data,
   // which is a weak position for a project whose whole argument is measurement.
   ReplayOutcome outcome;
   std::size_t peak_live_orders = 0;
+  std::size_t peak_at_message = 0;
   std::size_t peak_occupied_levels = 0;
   std::int32_t lowest_tick = std::numeric_limits<std::int32_t>::max();
   std::int32_t highest_tick = std::numeric_limits<std::int32_t>::min();
@@ -514,7 +561,23 @@ void replay_symbol(std::span<const std::byte> data,
         ++seen;
         driver.apply(message);
 
-        peak_live_orders = std::max<std::size_t>(peak_live_orders, book->pool().live_count());
+        if (book->pool().live_count() > peak_live_orders) {
+          peak_live_orders = book->pool().live_count();
+          peak_at_message = seen;
+
+          // Captured on every new record rather than found in a second pass, so
+          // the ladder and the peak it belongs to come from one replay. The cost
+          // is a bitmap walk per record, and records are rare once the book has
+          // filled: a few thousand over a day of millions of messages.
+          if (options.depth_at_peak) {
+            capture_ladder(outcome.ladder, *book, seen);
+          }
+        }
+
+        if (options.depth_at != 0 && seen == options.depth_at) {
+          capture_ladder(outcome.ladder, *book, seen);
+        }
+
         peak_occupied_levels = std::max<std::size_t>(
             peak_occupied_levels,
             book->occupied_level_count(ob::Side::buy) + book->occupied_level_count(ob::Side::sell));
@@ -593,6 +656,7 @@ void replay_symbol(std::span<const std::byte> data,
   }
 
   outcome.peak_live_orders = peak_live_orders;
+  outcome.peak_live_orders_at_message = peak_at_message;
   outcome.peak_occupied_levels = peak_occupied_levels;
   outcome.touch_seen = highest_tick >= lowest_tick;
   if (outcome.touch_seen) {
@@ -600,12 +664,29 @@ void replay_symbol(std::span<const std::byte> data,
     outcome.highest_tick = highest_tick;
   }
 
+  // A --depth-at beyond the end of the stream would otherwise leave an empty
+  // ladder that looks like a genuinely empty book. Say so and fall back.
+  const bool requested_snapshot = options.depth_at != 0 || options.depth_at_peak;
+  if (requested_snapshot && outcome.ladder.at_message == 0) {
+    std::cerr << "no depth snapshot was taken before the stream ended at " << seen
+              << " messages, snapshotting the end of replay instead\n";
+  }
+  if (!requested_snapshot || outcome.ladder.at_message == 0) {
+    capture_ladder(outcome.ladder, *book, seen);
+  }
+  outcome.ladder.at_peak_depth = outcome.ladder.at_message == outcome.peak_live_orders_at_message;
+
+  std::cout << "\ndepth snapshot taken at message " << outcome.ladder.at_message << " with "
+            << outcome.ladder.live_orders << " live orders\n";
+  std::cout << "peak live orders reached at message " << outcome.peak_live_orders_at_message
+            << '\n';
+
   if (!options.json_path.empty()) {
     write_replay_json(options, provenance, *book, driver, result, outcome);
-    std::cout << "\nwrote " << options.json_path << '\n';
+    std::cout << "wrote " << options.json_path << '\n';
   }
   if (!options.depth_path.empty()) {
-    write_depth_json(options, provenance, *book);
+    write_depth_json(options, provenance, *book, outcome.ladder);
     std::cout << "wrote " << options.depth_path << '\n';
   }
 }
@@ -625,6 +706,8 @@ int main(int argc, char** argv) {
   std::string json_path;
   std::string depth_path;
   std::size_t depth_levels = 20;
+  std::size_t depth_at = 0;
+  bool depth_at_peak = false;
   std::string sha256;
   std::string value;
 
@@ -637,6 +720,10 @@ int main(int argc, char** argv) {
     }
     if (argument == "--survey") {
       do_survey = true;
+      continue;
+    }
+    if (argument == "--depth-at-peak") {
+      depth_at_peak = true;
       continue;
     }
     if (match_option(argument, "--symbol", index, argc, argv, value)) {
@@ -665,6 +752,13 @@ int main(int argc, char** argv) {
         bad_value("--depth-levels", value);
       }
       depth_levels = static_cast<std::size_t>(unsigned_value);
+      continue;
+    }
+    if (match_option(argument, "--depth-at", index, argc, argv, value)) {
+      if (!parse_u64(value, unsigned_value)) {
+        bad_value("--depth-at", value);
+      }
+      depth_at = static_cast<std::size_t>(unsigned_value);
       continue;
     }
     if (match_option(argument, "--top", index, argc, argv, value)) {
@@ -745,6 +839,8 @@ int main(int argc, char** argv) {
   options.json_path = json_path;
   options.depth_path = depth_path;
   options.depth_levels = depth_levels;
+  options.depth_at = depth_at;
+  options.depth_at_peak = depth_at_peak;
 
   ob::json::Provenance provenance;
   provenance.tool = "itch_replay";

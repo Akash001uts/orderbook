@@ -1,0 +1,75 @@
+{
+  "schema": 1,
+  "tool": "itch_replay",
+  "version": "0.1.0",
+  "provenance": {
+    "source": "data/slices/MSFT.itch",
+    "source_bytes": 36901122,
+    "source_sha256": "309d94558eaeff7c432a64498570dc37b9ece23cb5974423215413af9f3eb42d",
+    "command": "itch_replay --symbol MSFT --json site/data/symbols/MSFT/replay.json --json-depth site/data/symbols/MSFT/depth.json --depth-at-peak --sha256 309d94558eaeff7c432a64498570dc37b9ece23cb5974423215413af9f3eb42d data/slices/MSFT.itch"
+  },
+  "symbol": "MSFT",
+  "config": {
+    "band_levels": 65536,
+    "arena_capacity": 262144,
+    "max_cold_levels_per_side": 8192,
+    "tick_size": 100,
+    "price_scale": 10000,
+    "message_limit": 0
+  },
+  "parse": {
+    "status": 0,
+    "messages": 1221484,
+    "bytes_consumed": 36901122,
+    "unknown_types": 0
+  },
+  "locate": {
+    "resolved": true,
+    "code": 5291
+  },
+  "messages": {
+    "applied": 1221477,
+    "other_symbol": 0,
+    "adds": 576026,
+    "executions": 35315,
+    "cancels": 840,
+    "deletes": 548858,
+    "replaces": 54873,
+    "trades": 5057,
+    "cross_trades": 2,
+    "broken_trades": 0,
+    "system_events": 6
+  },
+  "rejections": {
+    "off_tick_prices": 12,
+    "rejected_adds": 0,
+    "unknown_order_references": 12
+  },
+  "book": {
+    "final_resting_orders": 0,
+    "occupied_bid_levels": 0,
+    "occupied_ask_levels": 0,
+    "rebases": 9,
+    "rebases_abandoned": 0,
+    "cold_levels": 0,
+    "cold_operations": 24
+  },
+  "sizing": {
+    "peak_live_orders": 22994,
+    "peak_live_orders_at_message": 1196579,
+    "arena_capacity": 262144,
+    "library_arena_default": 65536,
+    "peak_occupied_levels": 3803,
+    "band_levels": 65536,
+    "touch_low_tick": 101,
+    "touch_high_tick": 16100,
+    "touch_span_ticks": 15999,
+    "touch_span_band_percent": 24.4125
+  },
+  "final_touch": {
+    "bid_tick": null,
+    "bid_price": null,
+    "ask_tick": null,
+    "ask_price": null
+  }
+}

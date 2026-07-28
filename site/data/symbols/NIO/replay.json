@@ -1,0 +1,75 @@
+{
+  "schema": 1,
+  "tool": "itch_replay",
+  "version": "0.1.0",
+  "provenance": {
+    "source": "data/slices/NIO.itch",
+    "source_bytes": 23689635,
+    "source_sha256": "3fb244f79c244b879c308e2f8c00c14cce911f403c4c63e2cda4f53b2c4375eb",
+    "command": "itch_replay --symbol NIO --json site/data/symbols/NIO/replay.json --json-depth site/data/symbols/NIO/depth.json --depth-at-peak --sha256 3fb244f79c244b879c308e2f8c00c14cce911f403c4c63e2cda4f53b2c4375eb data/slices/NIO.itch"
+  },
+  "symbol": "NIO",
+  "config": {
+    "band_levels": 65536,
+    "arena_capacity": 262144,
+    "max_cold_levels_per_side": 8192,
+    "tick_size": 100,
+    "price_scale": 10000,
+    "message_limit": 0
+  },
+  "parse": {
+    "status": 0,
+    "messages": 754038,
+    "bytes_consumed": 23689635,
+    "unknown_types": 0
+  },
+  "locate": {
+    "resolved": true,
+    "code": 5537
+  },
+  "messages": {
+    "applied": 754031,
+    "other_symbol": 0,
+    "adds": 327911,
+    "executions": 68555,
+    "cancels": 5204,
+    "deletes": 272229,
+    "replaces": 66325,
+    "trades": 13323,
+    "cross_trades": 2,
+    "broken_trades": 0,
+    "system_events": 6
+  },
+  "rejections": {
+    "off_tick_prices": 2,
+    "rejected_adds": 0,
+    "unknown_order_references": 2
+  },
+  "book": {
+    "final_resting_orders": 0,
+    "occupied_bid_levels": 0,
+    "occupied_ask_levels": 0,
+    "rebases": 4,
+    "rebases_abandoned": 0,
+    "cold_levels": 0,
+    "cold_operations": 6
+  },
+  "sizing": {
+    "peak_live_orders": 2826,
+    "peak_live_orders_at_message": 677063,
+    "arena_capacity": 262144,
+    "library_arena_default": 65536,
+    "peak_occupied_levels": 484,
+    "band_levels": 65536,
+    "touch_low_tick": 200,
+    "touch_high_tick": 495,
+    "touch_span_ticks": 295,
+    "touch_span_band_percent": 0.4501
+  },
+  "final_touch": {
+    "bid_tick": null,
+    "bid_price": null,
+    "ask_tick": null,
+    "ask_price": null
+  }
+}

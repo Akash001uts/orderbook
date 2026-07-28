@@ -63,10 +63,15 @@ mkdir -p "${OUT_DIR}"
 
 echo "regenerating ${SYMBOL} artifacts from ${OB_SLICE} into ${OUT_DIR}"
 
+# --depth-at-peak so this artifact and the per symbol ones mean the same thing,
+# which lets the site render both through one code path. The committed slice is an
+# opening prefix and would have a non-empty book at its end, but a full trading day
+# would not, and the difference should not live in the renderer.
 "${REPLAY}" \
   --symbol "${SYMBOL}" \
   --json "${OUT_DIR}/replay.json" \
   --json-depth "${OUT_DIR}/depth.json" \
+  --depth-at-peak \
   --sha256 "${SHA}" \
   "${OB_SLICE}" >/dev/null
 

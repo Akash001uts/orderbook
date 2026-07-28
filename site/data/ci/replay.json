@@ -6,7 +6,7 @@
     "source": "data/qqq_slice.itch",
     "source_bytes": 5533732,
     "source_sha256": "0ad09797f67716f7a6316c9d188c9406b66ee0ea7f7ea46dbf2627631b629588",
-    "command": "itch_replay --symbol QQQ --json site/data/ci/replay.json --json-depth site/data/ci/depth.json --sha256 0ad09797f67716f7a6316c9d188c9406b66ee0ea7f7ea46dbf2627631b629588 data/qqq_slice.itch"
+    "command": "itch_replay --symbol QQQ --json site/data/ci/replay.json --json-depth site/data/ci/depth.json --depth-at-peak --sha256 0ad09797f67716f7a6316c9d188c9406b66ee0ea7f7ea46dbf2627631b629588 data/qqq_slice.itch"
   },
   "symbol": "QQQ",
   "config": {
@@ -56,6 +56,7 @@
   },
   "sizing": {
     "peak_live_orders": 7730,
+    "peak_live_orders_at_message": 162886,
     "arena_capacity": 262144,
     "library_arena_default": 65536,
     "peak_occupied_levels": 2370,

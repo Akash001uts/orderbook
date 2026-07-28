@@ -1,0 +1,75 @@
+{
+  "schema": 1,
+  "tool": "itch_replay",
+  "version": "0.1.0",
+  "provenance": {
+    "source": "data/slices/AMD.itch",
+    "source_bytes": 45111950,
+    "source_sha256": "3861915eaaa73f2af9ef7f88ca5ae778bafe3f8fc25c253cada77347ff702070",
+    "command": "itch_replay --symbol AMD --json site/data/symbols/AMD/replay.json --json-depth site/data/symbols/AMD/depth.json --depth-at-peak --sha256 3861915eaaa73f2af9ef7f88ca5ae778bafe3f8fc25c253cada77347ff702070 data/slices/AMD.itch"
+  },
+  "symbol": "AMD",
+  "config": {
+    "band_levels": 65536,
+    "arena_capacity": 262144,
+    "max_cold_levels_per_side": 8192,
+    "tick_size": 100,
+    "price_scale": 10000,
+    "message_limit": 0
+  },
+  "parse": {
+    "status": 0,
+    "messages": 1512680,
+    "bytes_consumed": 45111950,
+    "unknown_types": 0
+  },
+  "locate": {
+    "resolved": true,
+    "code": 344
+  },
+  "messages": {
+    "applied": 1512673,
+    "other_symbol": 0,
+    "adds": 686997,
+    "executions": 37789,
+    "cancels": 77641,
+    "deletes": 657865,
+    "replaces": 46508,
+    "trades": 5368,
+    "cross_trades": 2,
+    "broken_trades": 0,
+    "system_events": 6
+  },
+  "rejections": {
+    "off_tick_prices": 9,
+    "rejected_adds": 0,
+    "unknown_order_references": 9
+  },
+  "book": {
+    "final_resting_orders": 0,
+    "occupied_bid_levels": 0,
+    "occupied_ask_levels": 0,
+    "rebases": 8,
+    "rebases_abandoned": 0,
+    "cold_levels": 0,
+    "cold_operations": 30
+  },
+  "sizing": {
+    "peak_live_orders": 11605,
+    "peak_live_orders_at_message": 1500388,
+    "arena_capacity": 262144,
+    "library_arena_default": 65536,
+    "peak_occupied_levels": 2010,
+    "band_levels": 65536,
+    "touch_low_tick": 3700,
+    "touch_high_tick": 4888,
+    "touch_span_ticks": 1188,
+    "touch_span_band_percent": 1.8127
+  },
+  "final_touch": {
+    "bid_tick": null,
+    "bid_price": null,
+    "ask_tick": null,
+    "ask_price": null
+  }
+}

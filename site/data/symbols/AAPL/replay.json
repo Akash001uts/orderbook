@@ -1,0 +1,75 @@
+{
+  "schema": 1,
+  "tool": "itch_replay",
+  "version": "0.1.0",
+  "provenance": {
+    "source": "data/slices/AAPL.itch",
+    "source_bytes": 46286421,
+    "source_sha256": "91be7ee5ce4eef608bbeeff784b1446b46ec6efbc9d1640f4ac0294b51d5f47d",
+    "command": "itch_replay --symbol AAPL --json site/data/symbols/AAPL/replay.json --json-depth site/data/symbols/AAPL/depth.json --depth-at-peak --sha256 91be7ee5ce4eef608bbeeff784b1446b46ec6efbc9d1640f4ac0294b51d5f47d data/slices/AAPL.itch"
+  },
+  "symbol": "AAPL",
+  "config": {
+    "band_levels": 65536,
+    "arena_capacity": 262144,
+    "max_cold_levels_per_side": 8192,
+    "tick_size": 100,
+    "price_scale": 10000,
+    "message_limit": 0
+  },
+  "parse": {
+    "status": 0,
+    "messages": 1519871,
+    "bytes_consumed": 46286421,
+    "unknown_types": 0
+  },
+  "locate": {
+    "resolved": true,
+    "code": 13
+  },
+  "messages": {
+    "applied": 1519864,
+    "other_symbol": 0,
+    "adds": 698744,
+    "executions": 60543,
+    "cancels": 1467,
+    "deletes": 654457,
+    "replaces": 96968,
+    "trades": 7178,
+    "cross_trades": 2,
+    "broken_trades": 0,
+    "system_events": 6
+  },
+  "rejections": {
+    "off_tick_prices": 13,
+    "rejected_adds": 0,
+    "unknown_order_references": 13
+  },
+  "book": {
+    "final_resting_orders": 0,
+    "occupied_bid_levels": 0,
+    "occupied_ask_levels": 0,
+    "rebases": 109,
+    "rebases_abandoned": 0,
+    "cold_levels": 0,
+    "cold_operations": 58
+  },
+  "sizing": {
+    "peak_live_orders": 27097,
+    "peak_live_orders_at_message": 1491241,
+    "arena_capacity": 262144,
+    "library_arena_default": 65536,
+    "peak_occupied_levels": 5298,
+    "band_levels": 65536,
+    "touch_low_tick": 28522,
+    "touch_high_tick": 31000,
+    "touch_span_ticks": 2478,
+    "touch_span_band_percent": 3.7811
+  },
+  "final_touch": {
+    "bid_tick": null,
+    "bid_price": null,
+    "ask_tick": null,
+    "ask_price": null
+  }
+}

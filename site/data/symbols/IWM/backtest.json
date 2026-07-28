@@ -1,0 +1,108 @@
+{
+  "schema": 1,
+  "tool": "ob_strategy_backtest",
+  "version": "0.1.0",
+  "provenance": {
+    "source": "data/slices/IWM.itch",
+    "source_bytes": 58076921,
+    "source_sha256": "62d6c83ca068b927c1075f2fbce30ef954ef453d4904547d260fce2178313a0f",
+    "command": "ob_strategy_backtest --file data/slices/IWM.itch --symbol IWM --json site/data/symbols/IWM/backtest.json --sha256 62d6c83ca068b927c1075f2fbce30ef954ef453d4904547d260fce2178313a0f"
+  },
+  "config": {
+    "symbol": "IWM",
+    "quote_offset_ticks": 1,
+    "quote_size": 100,
+    "position_limit": 1000,
+    "inventory_skew_ticks": 0.0000,
+    "latency_us": 0
+  },
+  "replay": {
+    "messages_seen": 1940763,
+    "messages_applied": 1940756
+  },
+  "pnl": {
+    "spread": 16714.00,
+    "inventory": 4452.00,
+    "fees": 39.57,
+    "total": 21205.57,
+    "unit": "ticks times shares"
+  },
+  "risk": {
+    "final_position": 468,
+    "max_long": 974,
+    "max_short": -950,
+    "time_holding_ns": 56488451649326,
+    "max_drawdown": 196121.16
+  },
+  "activity": {
+    "fills": 302,
+    "filled_shares": 19784,
+    "quoted_shares": 5184600,
+    "trade_through_fills": 38,
+    "quotes_placed": 51846,
+    "quotes_cancelled": 51685,
+    "quotes_rejected": 110,
+    "cancels_too_late": 0,
+    "limit_overshoot_shares": 0,
+    "fill_ratio": 0.0038
+  },
+  "sharpe": {
+    "value": 0.0122,
+    "samples": 57598,
+    "informative_samples": 11119,
+    "clears_minimum_events": true,
+    "annualised": false
+  },
+  "markouts": [
+    {
+      "horizon": "100ms",
+      "horizon_ns": 100000000,
+      "buy_per_share": -0.850188,
+      "sell_per_share": -0.018637,
+      "all_per_share": -0.444248,
+      "fills": 302
+    },
+    {
+      "horizon": "1s",
+      "horizon_ns": 1000000000,
+      "buy_per_share": -0.715189,
+      "sell_per_share": -0.072738,
+      "all_per_share": -0.401562,
+      "fills": 302
+    },
+    {
+      "horizon": "10s",
+      "horizon_ns": 10000000000,
+      "buy_per_share": 0.089275,
+      "sell_per_share": -0.098726,
+      "all_per_share": -0.002502,
+      "fills": 302
+    },
+    {
+      "horizon": "60s",
+      "horizon_ns": 60000000000,
+      "buy_per_share": -2.149269,
+      "sell_per_share": 1.490526,
+      "all_per_share": -0.372422,
+      "fills": 302
+    },
+    {
+      "horizon": "300s",
+      "horizon_ns": 300000000000,
+      "buy_per_share": -4.389937,
+      "sell_per_share": 11.406140,
+      "all_per_share": 3.321270,
+      "fills": 302
+    }
+  ],
+  "unresolved_markouts": 0,
+  "crossed_book": {
+    "intervals": 45,
+    "total_ns": 1862824568,
+    "observations": 1940692,
+    "crossed_observations": 45,
+    "locked_observations": 24,
+    "worst_depth_ticks": 317,
+    "crossed_percent": 0.0023
+  }
+}

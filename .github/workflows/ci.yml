@@ -347,3 +347,9 @@ jobs:
             echo "and commit the result with the change that caused it."
             exit 1
           fi
+
+      # The index cannot be regenerated from raw data here, but it is a pure
+      # function of the per symbol artifacts that are committed, so it can be
+      # rebuilt and compared. That closes the gap the provenance rule leaves.
+      - name: Check the index against the artifacts it is derived from
+        run: python3 scripts/build_index.py --check

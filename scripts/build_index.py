@@ -44,24 +44,31 @@ def entry_for(directory):
     """One index row, read out of that symbol's own artifacts."""
     replay = load(directory / "replay.json")
     backtest = load(directory / "backtest.json")
+    depth = load(directory / "depth.json")
 
     source_path = directory / "source.json"
     source = load(source_path) if source_path.exists() else {}
 
     sizing = replay["sizing"]
-    touch = replay["final_touch"]
 
+    # The touch comes from the depth snapshot, not from the end of the replay. A
+    # full trading day closes with the book emptied, so the final touch of a whole
+    # day is null for every symbol, which is correct and useless in a summary line.
+    # The snapshot is taken where the book was deepest, so its touch is a price the
+    # symbol actually traded around.
     return {
         "symbol": replay["symbol"],
         "messages_applied": replay["messages"]["applied"],
         "peak_live_orders": sizing["peak_live_orders"],
         "library_arena_default": sizing["library_arena_default"],
-        "final_bid_price": touch["bid_price"],
-        "final_ask_price": touch["ask_price"],
+        "bid_price": depth["bid_price"],
+        "ask_price": depth["ask_price"],
         "price_scale": replay["config"]["price_scale"],
+        "touch_span_ticks": sizing["touch_span_ticks"],
         "baseline_total_pnl": backtest["pnl"]["total"],
         "fills": backtest["activity"]["fills"],
         "off_tick_prices": replay["rejections"]["off_tick_prices"],
+        "rejected_adds": replay["rejections"]["rejected_adds"],
         "rebases": replay["book"]["rebases"],
         "cold_levels": replay["book"]["cold_levels"],
         "reproducible_in_ci": bool(source.get("reproducible_in_ci", False)),

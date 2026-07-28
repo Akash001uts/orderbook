@@ -1,0 +1,268 @@
+{
+  "schema": 1,
+  "tool": "itch_replay",
+  "version": "0.1.0",
+  "provenance": {
+    "source": "data/slices/AAPL.itch",
+    "source_bytes": 46286421,
+    "source_sha256": "91be7ee5ce4eef608bbeeff784b1446b46ec6efbc9d1640f4ac0294b51d5f47d",
+    "command": "itch_replay --symbol AAPL --json site/data/symbols/AAPL/replay.json --json-depth site/data/symbols/AAPL/depth.json --depth-at-peak --sha256 91be7ee5ce4eef608bbeeff784b1446b46ec6efbc9d1640f4ac0294b51d5f47d data/slices/AAPL.itch"
+  },
+  "symbol": "AAPL",
+  "levels_per_side": 20,
+  "price_scale": 10000,
+  "tick_size": 100,
+  "captured_at_message": 1491241,
+  "captured_at_peak_depth": true,
+  "live_orders_at_capture": 27097,
+  "occupied_bid_levels": 4211,
+  "occupied_ask_levels": 1079,
+  "bid_tick": 29160,
+  "bid_price": 2916000,
+  "ask_tick": 29167,
+  "ask_price": 2916700,
+  "bids": [
+    {
+      "tick": 29160,
+      "price": 2916000,
+      "quantity": 300,
+      "orders": 3
+    },
+    {
+      "tick": 29159,
+      "price": 2915900,
+      "quantity": 700,
+      "orders": 7
+    },
+    {
+      "tick": 29158,
+      "price": 2915800,
+      "quantity": 300,
+      "orders": 3
+    },
+    {
+      "tick": 29157,
+      "price": 2915700,
+      "quantity": 1000,
+      "orders": 3
+    },
+    {
+      "tick": 29156,
+      "price": 2915600,
+      "quantity": 100,
+      "orders": 1
+    },
+    {
+      "tick": 29155,
+      "price": 2915500,
+      "quantity": 200,
+      "orders": 2
+    },
+    {
+      "tick": 29154,
+      "price": 2915400,
+      "quantity": 100,
+      "orders": 1
+    },
+    {
+      "tick": 29153,
+      "price": 2915300,
+      "quantity": 3500,
+      "orders": 6
+    },
+    {
+      "tick": 29152,
+      "price": 2915200,
+      "quantity": 300,
+      "orders": 2
+    },
+    {
+      "tick": 29151,
+      "price": 2915100,
+      "quantity": 200,
+      "orders": 2
+    },
+    {
+      "tick": 29150,
+      "price": 2915000,
+      "quantity": 1349,
+      "orders": 3
+    },
+    {
+      "tick": 29149,
+      "price": 2914900,
+      "quantity": 500,
+      "orders": 3
+    },
+    {
+      "tick": 29148,
+      "price": 2914800,
+      "quantity": 500,
+      "orders": 4
+    },
+    {
+      "tick": 29147,
+      "price": 2914700,
+      "quantity": 100,
+      "orders": 1
+    },
+    {
+      "tick": 29146,
+      "price": 2914600,
+      "quantity": 100,
+      "orders": 1
+    },
+    {
+      "tick": 29145,
+      "price": 2914500,
+      "quantity": 2000,
+      "orders": 6
+    },
+    {
+      "tick": 29144,
+      "price": 2914400,
+      "quantity": 600,
+      "orders": 4
+    },
+    {
+      "tick": 29143,
+      "price": 2914300,
+      "quantity": 449,
+      "orders": 4
+    },
+    {
+      "tick": 29142,
+      "price": 2914200,
+      "quantity": 500,
+      "orders": 1
+    },
+    {
+      "tick": 29141,
+      "price": 2914100,
+      "quantity": 400,
+      "orders": 2
+    }
+  ],
+  "asks": [
+    {
+      "tick": 29167,
+      "price": 2916700,
+      "quantity": 400,
+      "orders": 3
+    },
+    {
+      "tick": 29169,
+      "price": 2916900,
+      "quantity": 300,
+      "orders": 2
+    },
+    {
+      "tick": 29170,
+      "price": 2917000,
+      "quantity": 470,
+      "orders": 5
+    },
+    {
+      "tick": 29171,
+      "price": 2917100,
+      "quantity": 200,
+      "orders": 2
+    },
+    {
+      "tick": 29172,
+      "price": 2917200,
+      "quantity": 200,
+      "orders": 2
+    },
+    {
+      "tick": 29173,
+      "price": 2917300,
+      "quantity": 649,
+      "orders": 6
+    },
+    {
+      "tick": 29174,
+      "price": 2917400,
+      "quantity": 400,
+      "orders": 3
+    },
+    {
+      "tick": 29175,
+      "price": 2917500,
+      "quantity": 710,
+      "orders": 5
+    },
+    {
+      "tick": 29176,
+      "price": 2917600,
+      "quantity": 400,
+      "orders": 2
+    },
+    {
+      "tick": 29177,
+      "price": 2917700,
+      "quantity": 386,
+      "orders": 3
+    },
+    {
+      "tick": 29178,
+      "price": 2917800,
+      "quantity": 800,
+      "orders": 2
+    },
+    {
+      "tick": 29179,
+      "price": 2917900,
+      "quantity": 300,
+      "orders": 1
+    },
+    {
+      "tick": 29180,
+      "price": 2918000,
+      "quantity": 3549,
+      "orders": 7
+    },
+    {
+      "tick": 29181,
+      "price": 2918100,
+      "quantity": 484,
+      "orders": 3
+    },
+    {
+      "tick": 29182,
+      "price": 2918200,
+      "quantity": 300,
+      "orders": 1
+    },
+    {
+      "tick": 29183,
+      "price": 2918300,
+      "quantity": 900,
+      "orders": 4
+    },
+    {
+      "tick": 29184,
+      "price": 2918400,
+      "quantity": 600,
+      "orders": 2
+    },
+    {
+      "tick": 29185,
+      "price": 2918500,
+      "quantity": 1484,
+      "orders": 4
+    },
+    {
+      "tick": 29187,
+      "price": 2918700,
+      "quantity": 249,
+      "orders": 3
+    },
+    {
+      "tick": 29188,
+      "price": 2918800,
+      "quantity": 3100,
+      "orders": 2
+    }
+  ]
+}

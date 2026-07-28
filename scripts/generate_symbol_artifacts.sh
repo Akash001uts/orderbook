@@ -106,11 +106,15 @@ for SYMBOL in "$@"; do
 }
 JSON
 
+  # --depth-at-peak because a full trading day ends with the book emptied by the
+  # session close, so an end of replay ladder over a whole day is correct and shows
+  # nothing.
   echo "replay and depth"
   "${REPLAY}" \
     --symbol "${SYMBOL}" \
     --json "${DIR}/replay.json" \
     --json-depth "${DIR}/depth.json" \
+    --depth-at-peak \
     --sha256 "${SLICE_SHA}" \
     "${SLICE}" >/dev/null
 
