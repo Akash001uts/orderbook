@@ -351,12 +351,16 @@ argument rests on.
 
 Run with `ob_baseline_bench`, 9 repetitions, medians reported.
 
+Reissued at the current default arena of 18 432 slots and a working set of 8 192
+live orders, which is close to the 8 842 peak a full day of QQQ actually reaches.
+Both arms take the identical workload.
+
 | Operation | Flat book | `std::map` book | Ratio |
 | --- | --- | --- | --- |
-| Add, resting | 26.9 ns | 73.5 ns | **2.7x faster** |
-| Cancel | 10.3 ns | 56.0 ns | **5.4x faster** |
-| Match, one level consumed | 38.7 ns | 65.2 ns | **1.7x faster** |
-| Best bid query | **0.27 ns** | 4.48 ns | see below |
+| Add, resting | 23.5 ns | 75.4 ns | **3.2x faster** |
+| Cancel | 15.4 ns | 71.8 ns | **4.7x faster** |
+| Match, one level consumed | 42.8 ns | 75.5 ns | **1.8x faster** |
+| Best bid query | **0.31 ns** | 4.66 ns | see below |
 
 **The best price query was the one operation the flat book lost, and it has since
 been fixed.** The history is worth keeping because the fix is only meaningful
@@ -391,15 +395,20 @@ measured outside every timed region:
 | | Allocations per add |
 | --- | --- |
 | Flat book | **0** |
-| `std::map` book | **2.016** |
+| `std::map` book | **2.064** |
 
 That figure decomposes completely, which is why it is worth more here than a
 cache-miss sample would be. Each add allocates one `std::list` node for the
 resting order and one `unordered_map` node for the id index, giving 2. Each of the
 512 levels allocates one `std::map` node on the first add that reaches it, giving
-512 over 32 768 adds, or 0.0156. Predicted total 2.0156 against 2.01599 measured.
-The remaining twelve allocations across the whole run are the id index rehashing
-its bucket array as it grows.
+512 over 8 192 adds, or 0.0625. Predicted total 2.0625 against 2.06372 measured,
+the remainder being the id index rehashing its bucket array as it grows.
+
+That the figure tracked the workload change is itself a check on the instrument.
+It moved from 2.016 to 2.064 when the order count fell from 32 768 to 8 192,
+which is exactly what amortising a fixed 512 map nodes over four times fewer adds
+predicts. An allocation counter that did not move, or moved differently, would
+have meant the decomposition was a coincidence rather than an explanation.
 
 The flat book's zero is not an approximation either. The arena, the level array,
 and the id map are all allocated once at construction, and the add path touches
@@ -574,30 +583,58 @@ figure is the right one for sizing even though it is the wrong one for describin
 the market. The continuous session is far tighter: the committed opening slice
 spans 94 ticks.
 
-**What the data supports.** Ten rebases and zero cold levels across a full day says
-the current band is comfortable rather than marginal, and 7.9 percent utilisation
-says it is comfortable by a wide margin. A band of 16 384 would sit at roughly 32
-percent utilisation with rebasing absorbing the drift, and would cut the level
-array from 3 MiB to 768 KiB.
+**What the data supported, and what was done about it.** Ten rebases and zero cold
+levels across a full day says the band is comfortable rather than marginal, and 7.9
+percent utilisation says comfortable by a wide margin. The band is left at 65 536.
 
-The arena is the more interesting one. Peak live orders is 8 842, so the 65 536
-default carries 7.4x headroom, and the Phase 1 arena sweep already measured what
-that costs: an add is 18.8 ns at 16 384 slots and 36.0 ns at 65 536, because the
-larger working set falls out of L2. **A default of 16 384 would still hold this
-symbol's peak with 1.85x headroom and would roughly halve the cost of an add.**
+**The arena default has been changed from 65 536 to 18 432 slots.** 18 432 is the
+smallest multiple of 1024 giving at least twice the measured 8 842 peak, so
+headroom is 2.08x. Capacity leads and cache residency follows, for the reasons in
+DESIGN.md: too small is a rejected order, too large is only a slowdown.
 
-**Neither default is changed here, and that is a decision rather than an
-oversight.** Every published figure in this document was taken at the current
-values, so changing them silently would invalidate the lot. More substantially, one
-symbol on one day is thin evidence for a library default: QQQ is unusually liquid
-in message rate but not especially deep, and a book with more resting orders would
-exhaust a 16 384 slot arena where it fits comfortably today. The measurement is
-recorded, the trade-off is quantified, and the change is left as an explicit call
-rather than made on this evidence alone.
+The arena curve, remeasured back to back in one run so the points are comparable to
+each other rather than to a figure from another session:
 
-What has changed is the justification. The constants are no longer round numbers
-with a plausible story attached; the utilisation is measured, published, and
-reproducible with one command.
+| Arena capacity | Working set | ns per add |
+| --- | --- | --- |
+| 4 096 | 0.16 MiB | 15.4 |
+| 16 384 | 0.63 MiB | 20.0 |
+| **18 432, the default** | **0.70 MiB** | **22.6** |
+| 65 536, the old default | 2.5 MiB | 26.9 |
+| 262 144 | 10 MiB | 67.6 |
+| 1 048 576 | 40 MiB | 132 |
+
+**Two things about this table are worth more than the headline.**
+
+The first is that the id map rounds its capacity to a power of two at or above
+twice the arena, so 18 432 sits in the 65 536 slot bucket while 16 384 sits in the
+32 768 one. The last 2 048 slots of headroom therefore double the id map and cost
+2.6 ns per add. **Going from 1.85x headroom to 2.08x is a 13 percent tax on adds,
+paid entirely at a bucket boundary rather than gradually.** Nothing about the
+arithmetic hints at that; only measuring the default directly rather than
+interpolating between powers of two revealed it.
+
+The second is how much of the improvement is the arena and how much is the
+benchmark. Measured against the old configuration back to back, an add went from
+48.2 ns to 23.5 ns, a factor of 2.05. But that change moved two things: the arena
+from 65 536 to 18 432, and the benchmark's live order count from 32 768 to 8 192 so
+it would fit. The arena alone accounts for 26.9 to 22.6, about 16 percent. The rest
+is the benchmark now measuring a book the size a real one reaches instead of one
+four times larger. **That is a more representative measurement rather than a
+faster book, and quoting the 2.05x as a speedup would be wrong.**
+
+### A caveat on the absolute numbers in this section
+
+This machine drifted badly across the session these were taken in. The same binary
+at the same configuration produced medians of 23.5 ns and 60.5 ns for an add on two
+runs an hour apart, a spread of 2.6x with no code change between them. Coefficients
+of variation reached 27 percent.
+
+Every comparison above is therefore taken from a paired run: both arms, or both
+configurations, measured back to back in the same process or the same minute. The
+ratios survive that treatment because both sides move together. **The absolute
+nanosecond figures should be read as one machine's reading on one afternoon**, and
+the isolated-core caveat at the top of this document is the reason why.
 
 ## Where this design is weak
 

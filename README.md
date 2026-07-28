@@ -38,10 +38,16 @@ conditions that produced it is in [BENCHMARKS.md](BENCHMARKS.md).
 
 The strategy results are in [STRATEGY.md](STRATEGY.md), and the fill model is
 stated before any P&L because every number is downstream of it. The baseline market
-maker loses money, and the attribution says why: its fills were good at every
-markout horizon out to ten seconds, but with inventory skew disabled it had no way
-to get flat and carried a thousand shares through a dollar decline. Turning skew on
-cuts the inventory loss by a factor of 3.5 while leaving spread capture unchanged.
+maker loses money, and the attribution says why: with inventory skew disabled it had
+no way to get flat and carried a thousand shares through a dollar decline. Turning
+skew on cuts the inventory loss by a factor of 3.5 while leaving spread capture
+unchanged.
+
+That document also records a conclusion it had to withdraw. It previously reported
+that the fills themselves were fine, which was true out to ten seconds and false at
+five minutes, where the aggregate markout turns negative. The horizon set decided
+what the metric could detect, and stopping early certified something that was not
+happening.
 
 ### Correctness
 
@@ -88,23 +94,31 @@ process under the same conditions, so the ratio is the durable part:
 
 | Operation | Flat book | `std::map` book | |
 | --- | --- | --- | --- |
-| Add | 26.9 ns | 73.5 ns | 2.7x faster |
-| Cancel | 10.3 ns | 56.0 ns | 5.4x faster |
-| Match, one level consumed | 38.7 ns | 65.2 ns | 1.7x faster |
-| Best bid query | **0.27 ns** | 4.48 ns | below the harness noise floor |
+| Add | 23.5 ns | 75.4 ns | 3.2x faster |
+| Cancel | 15.4 ns | 71.8 ns | 4.7x faster |
+| Match, one level consumed | 42.8 ns | 75.5 ns | 1.8x faster |
+| Best bid query | **0.31 ns** | 4.66 ns | below the harness noise floor |
 
 The last row has a history worth knowing. The flat book originally **lost** this
 query, 10.2 ns against the tree's 5.38 ns, because `std::map` caches its extreme
 element while a bitmap descent is three dependent loads. That was reported rather
 than buried, and then fixed by caching the final answer and repairing it lazily.
-The 0.27 ns is only 0.09 ns above an empty loop, so the accurate claim is that the
-query is below what the harness can resolve rather than that it costs 0.27 ns; a
-dedicated noise-floor benchmark exists to make that distinction checkable.
+The 0.31 ns is only about 0.14 ns above an empty loop, so the accurate claim is
+that the query is below what the harness can resolve rather than that it costs any
+particular number; a dedicated noise-floor benchmark exists to make that
+distinction checkable.
 
 The mechanism behind the ratio is counted rather than inferred, because no
 available host exposes hardware performance counters: the flat book allocates
-**0** times per add, the `std::map` book **2.016**, a figure that decomposes
+**0** times per add, the `std::map` book **2.064**, a figure that decomposes
 exactly into a list node, a hash node, and one map node per new level.
+
+Both arms run at the library default arena of 18 432 slots, which is derived from
+measured depth rather than chosen: a full day of QQQ peaks at 8 842 live orders and
+the default carries 2.08x headroom over it. Absolute figures come from paired runs
+taken back to back, because this machine drifted by up to 2.6x across a session on
+an unchanged binary. The ratios survive that; the nanoseconds are one afternoon's
+reading.
 
 **Replaying a real NASDAQ capture**, per message end to end, on a pinned core with
 an invariance-verified TSC:
@@ -122,7 +136,7 @@ timestamps per message cost enough to change the answer by a factor of 3.5.
 | --- | --- |
 | `sizeof(Order)` | 40 bytes, 32-bit arena indices rather than pointers |
 | `sizeof(PriceLevel)` | 24 bytes, 2.67 levels per cache line |
-| Footprint at defaults | 19.3 MiB: 3 MiB band, 16 KiB bitmaps, 10 MiB arena, 6 MiB id map |
+| Footprint at defaults | about 4.5 MiB: 3 MiB band, 16 KiB bitmaps, 0.70 MiB arena, 0.75 MiB id map |
 | Id map | load factor 0.50, mean probe count 1.0, lookup 2.3 ns |
 
 The same replay was run under GCC 16.1.0 on Windows and GCC 13.3.0 on Linux. Two

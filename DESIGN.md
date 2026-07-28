@@ -18,7 +18,7 @@ than stubbed: this document tracks what exists.
 - [Hierarchical bitmaps for best price](#hierarchical-bitmaps-for-best-price)
 - [Band rebasing, and what it costs](#band-rebasing-and-what-it-costs)
 - [The overflow cold path](#the-overflow-cold-path)
-- [Arena capacity is a cache decision](#arena-capacity-is-a-cache-decision)
+- [Arena capacity is a capacity decision, then a cache decision](#arena-capacity-is-a-capacity-decision-then-a-cache-decision)
 - [Differential testing, and why it is the strongest evidence here](#differential-testing-and-why-it-is-the-strongest-evidence-here)
 - [Self trade prevention as a template parameter](#self-trade-prevention-as-a-template-parameter)
 - [Fill-or-kill as a precondition, not an optimisation](#fill-or-kill-as-a-precondition-not-an-optimisation)
@@ -452,18 +452,44 @@ that cannot store an order has no correct alternative to failing loudly, and the
 condition means the machine is out of memory, not that the caller did anything a
 caller could handle.
 
-## Arena capacity is a cache decision
+## Arena capacity is a capacity decision, then a cache decision
 
-Every arena slot is 40 bytes and the id map adds another 24 per slot at the design
-load factor. So 2^16 orders costs roughly 4 MiB across the two, and 2^20 costs
-roughly 64 MiB.
+**Decision.** The default is 18 432 slots, derived from measured book depth. It was
+65 536 and the change is recent.
 
-Measured on a machine with 2.5 MiB L2 and 8 MiB L3, an add costs about 18 ns while
-that working set fits in L2 and about 130 ns when it does not, with the algorithmic
-work identical at every point. Oversizing the arena is therefore not free headroom,
-it is a seven times slowdown on every operation. The default is sized to a busy
-single symbol rather than to the largest book imaginable. The curve is published in
-BENCHMARKS.md.
+**Why capacity has to lead.** The two constraints fail in different ways. Too small
+and `add` returns `arena_exhausted`, a rejected order: visible, semantic, and a
+hard failure. Too large and everything slows down, which is a factor rather than a
+failure. A number chosen for cache residency that cannot hold the book is simply
+wrong, so depth sets it and cache residency is checked afterwards.
+
+**The derivation.** Replaying the full 2019-12-30 capture for QQQ peaks at 8 842
+live orders, reported by `itch_replay` so it is reproducible. 18 432 is the
+smallest multiple of 1024 giving at least twice that, at 2.08x headroom.
+
+**The cost, checked rather than assumed.** Each order is 40 bytes of arena plus
+about 24 of id map at the design load factor, so 18 432 orders is roughly 1.45 MiB,
+inside the 2.5 MiB L2 of the measurement machine. Measured back to back, an add
+costs 22.6 ns at this capacity against 26.9 ns at the old 65 536 and 132 ns at
+2^20, with the algorithmic work identical at every point. Oversizing is not free
+headroom; the far end of that curve is a six times slowdown on every operation.
+
+**One thing the derivation exposed that a round number would have hidden.** The id
+map rounds its capacity up to a power of two at or above twice the arena, so 18 432
+lands in the 65 536 slot bucket while 16 384 sits in the 32 768 one. The last 2 048
+slots of headroom therefore double the id map and cost about 2.6 ns per add, since
+16 384 measures 20.0 ns against 18 432's 22.6. Going from 1.85x headroom to 2.08x
+is a 13 percent tax on adds, paid entirely at a bucket boundary rather than
+gradually. That is a real trade and it is recorded rather than absorbed silently.
+
+**Not derived from the running machine's cache**, which is the obvious next step
+and is wrong. Capacity decides whether an order is accepted, so sizing it from
+detected hardware would make `arena_exhausted` depend on the machine, and the
+determinism claim this project rests on would weaken from "the same command
+sequence produces byte identical state" to "on the same machine". The cache figure
+is an observation about one host, not an input.
+
+The curve is published in BENCHMARKS.md.
 
 ## Differential testing, and why it is the strongest evidence here
 

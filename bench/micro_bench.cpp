@@ -18,9 +18,9 @@
 // with that framing is that add and cancel both change the size of the book, so a
 // long run either exhausts the arena or empties it. Rather than pausing the timer
 // on every iteration, which costs more than the operation being measured, these
-// benchmarks rebuild the book only when it runs out, under PauseTiming. With a
-// 2^20 slot arena that happens roughly once per million iterations, so its
-// contribution to the reported mean is far below the measurement noise.
+// benchmarks rebuild the book only when it runs out, under PauseTiming. At the
+// default arena that happens roughly once per eighteen thousand iterations, so its
+// contribution to the reported mean stays far below the measurement noise.
 //
 // The book is heap allocated because it holds megabytes of level array, and it is
 // rebuilt rather than reset so that no benchmark inherits another's cache state.
@@ -29,11 +29,11 @@
 // are all covered, and two of the additions exist to correct measurements Phase 1
 // got wrong rather than to add new ones.
 //
-// The surrounding discipline is not complete. Core pinning, warmup, turbo
-// detection, environment capture, and run-to-run variance are still ahead in this
-// phase, and until they land these numbers are taken on whatever core the
-// scheduler happened to provide. Nothing here should be quoted as a headline
-// figure yet.
+// Workload sizes are held at or below the arena rather than at some round power of
+// two, because a benchmark that exhausts the arena measures the rebuild path. The
+// queue position arms use 128 levels of 64 orders and the bitmap pair uses 512
+// levels of 16, both landing at 8 192 live orders, which is also close to the
+// 8 842 peak a real day of QQQ reaches.
 
 namespace {
 
@@ -58,13 +58,21 @@ using ob::Timestamp;
 using BenchBook = Book<DEFAULT_BAND_LEVELS>;
 using BenchEngine = Engine<CancelNewest, DEFAULT_BAND_LEVELS>;
 
-// 65536 live orders, which is a busy but realistic depth for a single liquid
-// symbol. It is not chosen to flatter the numbers, and the first version of this
-// file got it wrong in the other direction: a 2^20 slot arena puts 40 MiB of arena
-// and 24 MiB of id map against an 8 MiB L3, so every reported figure was a DRAM
-// latency rather than a property of the book. bm_add_by_arena_size below sweeps
-// this parameter so that the sensitivity is published rather than hidden.
-constexpr std::uint32_t ARENA_CAPACITY = 1U << 16;
+// The library default, so these figures describe the configuration that actually
+// ships rather than one chosen for the benchmark.
+//
+// It is derived from measured depth: a full day of QQQ peaks at 8 842 live orders,
+// and 18 432 is the smallest multiple of 1024 giving twice that. See the Config
+// comment in book.hpp for why capacity leads and cache residency follows.
+//
+// This file has now had the number wrong in both directions, which is why the
+// sweep below exists. The first version used a 2^20 slot arena, putting 40 MiB of
+// arena and 24 MiB of id map against an 8 MiB L3, so every figure was a DRAM
+// latency wearing an operation's name. The second overcorrected to 2^16, which fit
+// L2 but was eight times more headroom than any measured book needed.
+// bm_add_by_arena_size sweeps the parameter so the sensitivity stays published
+// rather than hidden.
+constexpr std::uint32_t ARENA_CAPACITY = 18432;
 
 // Kept well inside the band so that no rebase and no cold path operation can
 // contaminate a measurement of the hot path.
@@ -196,7 +204,7 @@ void bm_cancel_head(benchmark::State& state) {
 void bm_lookup(benchmark::State& state) {
   const std::unique_ptr<BenchBook> book = make_book();
 
-  constexpr std::uint64_t LIVE_ORDERS = 1U << 16;
+  constexpr std::uint64_t LIVE_ORDERS = 8192;
   for (std::uint64_t id = 1; id <= LIVE_ORDERS; ++id) {
     const auto price = static_cast<std::int32_t>(id % PRICE_SPREAD);
     benchmark::DoNotOptimize(book->add(request_for(id, price)));
@@ -261,7 +269,7 @@ constexpr std::int32_t TOGGLE_SPREAD = 256;
 
 // Background depth per level, so that both arms measure against a book of
 // realistic size rather than one that fits entirely in L1.
-constexpr std::uint32_t BACKGROUND_DEPTH = 64;
+constexpr std::uint32_t BACKGROUND_DEPTH = 16;
 
 void bitmap_transition_arm(benchmark::State& state, bool seed_sentinels) {
   std::unique_ptr<BenchBook> book = make_book();
@@ -320,7 +328,7 @@ void bm_bitmap_transition_excluded(benchmark::State& state) {
 enum class QueuePosition : std::uint8_t { head, middle, tail };
 
 constexpr std::uint32_t QUEUE_DEPTH = 64;
-constexpr std::int32_t QUEUE_LEVELS = 512;
+constexpr std::int32_t QUEUE_LEVELS = 128;
 
 // The exact sequence of ids to cancel so that every cancel removes the order then
 // standing at the requested position of its level's queue.
@@ -634,6 +642,7 @@ BENCHMARK(bm_add_existing_level);
 BENCHMARK(bm_add_by_arena_size)
     ->Arg(1 << 12)
     ->Arg(1 << 14)
+    ->Arg(18432)  // the library default, measured directly rather than interpolated
     ->Arg(1 << 16)
     ->Arg(1 << 18)
     ->Arg(1 << 20);

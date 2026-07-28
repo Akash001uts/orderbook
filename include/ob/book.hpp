@@ -142,17 +142,43 @@ class Book {
   // rare event it is designed to be.
   static constexpr std::size_t REBASE_MARGIN = BandLevels / 8;
 
-  // Arena capacity is a cache residency decision as much as a capacity one, and
-  // that is easy to miss. Every slot is 40 bytes and the id map adds another 24
-  // per slot at the design load factor, so 2^16 orders costs roughly 4 MiB across
-  // the two and 2^20 costs roughly 64 MiB. Measured on an 8 MiB L3, an add costs
-  // about 18 ns while that working set fits in L2 and about 130 ns when it does
-  // not. The default is therefore sized to a busy single symbol rather than to the
-  // largest book imaginable; oversizing it is not free headroom, it is a seven
+  // Arena capacity is a capacity decision first and a cache decision second, and
+  // getting that order the wrong way round is a trap worth naming.
+  //
+  // **Capacity has to lead, because the two constraints fail differently.** Too
+  // small and `add` returns `arena_exhausted`, which is a rejected order: visible,
+  // semantic, and a hard failure. Too large and every operation slows down, which
+  // is a factor rather than a failure. So the default is derived from how many
+  // orders a real book actually holds, and cache residency is checked afterwards
+  // as a consequence.
+  //
+  // **The derivation.** Replaying the full 2019-12-30 NASDAQ capture for QQQ, an
+  // ordinary liquid ETF, peaks at 8 842 live orders. `itch_replay` reports this,
+  // so it is reproducible rather than asserted. 18 432 is the smallest multiple of
+  // 1024 giving at least twice that, landing at 2.08x headroom.
+  //
+  // **The consequence, checked not assumed.** Each order costs 40 bytes of arena
+  // plus about 24 bytes of id map at the design load factor, so 18 432 orders is
+  // roughly 1.45 MiB of working set. That fits inside the 2.5 MiB L2 of the
+  // machine the published benchmarks were taken on, which matters because the
+  // Phase 1 sweep measured an add at about 18 ns while the working set fits L2 and
+  // about 130 ns when it does not. Oversizing is not free headroom, it is a seven
   // times slowdown on every operation.
+  //
+  // **This is deliberately not derived from the running machine's cache**, which
+  // is the obvious next step and is wrong. Capacity decides whether an order is
+  // accepted, so sizing it from detected hardware would make `arena_exhausted`
+  // depend on which machine the code runs on. The determinism claim this whole
+  // project rests on, that the same command sequence produces byte identical
+  // state, would quietly weaken to "on the same machine". A fixed constant keeps
+  // the failure threshold portable; the cache figure above is an observation about
+  // one host, not an input.
+  //
+  // A book expecting materially more depth than a liquid ETF should raise this
+  // explicitly rather than rely on the default.
   struct Config {
     PriceConfig price{};
-    std::uint32_t arena_capacity = 1U << 16;
+    std::uint32_t arena_capacity = 18432;
     std::size_t max_cold_levels_per_side = 4096;
     Ticks initial_center{0};
   };

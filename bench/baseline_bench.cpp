@@ -69,12 +69,17 @@ using ob::testing::ReferenceBook;
 using FlatEngine = Engine<CancelNewest, DEFAULT_BAND_LEVELS>;
 using NaiveBook = ReferenceBook<CancelNewest>;
 
-// Held below the flat book's arena capacity so that no arm ends up measuring
-// arena exhaustion, and spread across enough levels that neither implementation
-// degenerates into a single hot level.
-constexpr std::uint32_t BASELINE_ORDERS = 1U << 15;
+// 8 192 live orders against the library default arena of 18 432.
+//
+// Both numbers are derived rather than round. The arena is the shipped default, so
+// these figures describe the configuration that ships. The order count is close to
+// the 8 842 peak that a full day of QQQ actually reaches, and comfortably below the
+// arena, so no arm ends up measuring the rebuild path instead of the operation.
+// Levels are spread wide enough that neither implementation degenerates into a
+// single hot level.
+constexpr std::uint32_t BASELINE_ORDERS = 8192;
 constexpr std::int32_t BASELINE_LEVELS = 512;
-constexpr std::uint32_t ARENA_CAPACITY = 1U << 16;
+constexpr std::uint32_t ARENA_CAPACITY = 18432;
 constexpr std::uint64_t CROSS_QTY = 100;
 
 constexpr PriceConfig BASELINE_PRICES{
