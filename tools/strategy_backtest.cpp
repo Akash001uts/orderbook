@@ -31,7 +31,9 @@ struct Options {
   std::uint32_t size = 100;
   std::int64_t position_limit = 1000;
   double skew_ticks = 0.0;
+  std::uint64_t latency_us = 0;
   bool sweep = false;
+  bool latency_sweep = false;
   bool help = false;
 };
 
@@ -43,7 +45,10 @@ void print_usage() {
             << "  --size <shares>   quote size per side, default 100\n"
             << "  --limit <shares>  position limit, default 1000\n"
             << "  --skew <ticks>    quote shift at full inventory, default 0\n"
-            << "  --sweep           run the sensitivity grid instead of one config\n"
+            << "  --latency-us <n>  reaction latency in microseconds, default 0.\n"
+            << "                    Zero is an idealised bound, not a realistic setting\n"
+            << "  --sweep           run the parameter sensitivity grid\n"
+            << "  --latency-sweep   run the latency sensitivity grid\n"
             << "  --help\n";
 }
 
@@ -93,6 +98,10 @@ void print_usage() {
       options.sweep = true;
       continue;
     }
+    if (argument == "--latency-sweep") {
+      options.latency_sweep = true;
+      continue;
+    }
     if (argument == "--file") {
       if (!next_value(options.path)) {
         return false;
@@ -129,6 +138,13 @@ void print_usage() {
       options.position_limit = parsed;
       continue;
     }
+    if (argument == "--latency-us") {
+      if (!next_value(value) || !parse_long(value, parsed) || parsed < 0) {
+        return false;
+      }
+      options.latency_us = static_cast<std::uint64_t>(parsed);
+      continue;
+    }
     if (argument == "--skew") {
       double skew = 0.0;
       if (!next_value(value) || !parse_double(value, skew)) {
@@ -151,6 +167,7 @@ BacktestConfig config_from(const Options& options) {
   config.maker.quote_size = options.size;
   config.maker.position_limit = options.position_limit;
   config.maker.inventory_skew_ticks = options.skew_ticks;
+  config.latency_ns = options.latency_us * 1000ULL;
   return config;
 }
 
@@ -191,19 +208,33 @@ void report(const Backtest<>& backtest) {
             << std::defaultfloat << " of quoted shares\n";
   std::cout << "  Sharpe            " << std::fixed << std::setprecision(3) << pnl.sharpe()
             << std::defaultfloat << " on " << pnl.sample_count()
-            << " samples at a 1 s interval, not annualised\n";
+            << " one second samples, not annualised\n";
+  std::cout << "                    " << pnl.informative_sample_count() << " non-zero, from "
+            << pnl.fill_count() << " fills\n";
+  if (!pnl.sharpe_clears_minimum_events()) {
+    std::cout << "                    NOT MEANINGFUL: fewer than 30 fills, so a mean and a\n"
+              << "                    standard deviation do not describe anything here.\n";
+  }
+  std::cout << "                    Treat as descriptive regardless. The series is dominated by\n"
+            << "                    mark to market on a position held for a long time, so the\n"
+            << "                    samples are strongly autocorrelated, which understates the\n"
+            << "                    variance and therefore overstates the ratio.\n";
 
   std::cout << "\nMarkouts, signed P&L per share against mid at each horizon\n";
   std::cout << "  " << std::left << std::setw(8) << "horizon" << std::right << std::setw(12)
             << "buy" << std::setw(12) << "sell" << std::setw(12) << "all" << std::setw(10)
             << "fills" << "\n";
-  print_markout("100ms", pnl.markout_100ms());
-  print_markout("1s", pnl.markout_1s());
-  print_markout("10s", pnl.markout_10s());
+  for (std::size_t index = 0; index < ob::strategy::MARKOUT_COUNT; ++index) {
+    print_markout(ob::strategy::MARKOUT_LABELS[index], pnl.markout(index));
+  }
   std::cout << "  Unresolved at end of replay: " << pnl.unresolved_markouts()
             << ". A horizon whose fills are mostly unresolved has not been measured.\n";
   std::cout << "  Persistently negative markouts mean the strategy is being adversely\n";
   std::cout << "  selected: the market moves against every fill shortly after it happens.\n";
+  std::cout << "\n  Read these against the holding time above, not on their own. The longest\n";
+  std::cout << "  horizon here is 300 s. If the strategy held inventory for hours, healthy\n";
+  std::cout << "  markouts say each fill was individually fine and say nothing about the\n";
+  std::cout << "  position built out of them, which is where the money actually went.\n";
 
   std::cout << "\nCrossed book, the honesty check\n";
   std::cout << "  Crossed intervals " << crossed.intervals << "\n";
@@ -214,6 +245,47 @@ void report(const Backtest<>& backtest) {
   std::cout << "  Worst depth       " << crossed.worst_depth_ticks << " ticks\n";
   std::cout << "  A crossed interval is time the quote sat inside the real spread with\n";
   std::cout << "  nobody trading against it. See DESIGN.md for why those are not fills.\n";
+}
+
+// How much the zero latency assumption was worth, measured rather than argued.
+//
+// Everything else in this file varies a strategy parameter. This varies an
+// assumption about the world, which is the more important axis: a parameter the
+// strategy chooses can be tuned, while latency is imposed on it. The values span
+// a co-located participant at a few microseconds through to something well off
+// the critical path at a millisecond.
+void run_latency_sweep(std::span<const std::byte> data, const Options& options) {
+  const std::vector<std::uint64_t> latencies_us{0, 1, 5, 25, 100, 500, 1000};
+
+  std::cout << "\nlatency_us,total_pnl,spread,inventory,fills,filled_shares,fill_ratio,"
+            << "quotes_placed,markout_1s_per_share,crossed_pct\n";
+
+  for (const std::uint64_t latency : latencies_us) {
+    Options local = options;
+    local.latency_us = latency;
+
+    Backtest<> backtest(config_from(local));
+    backtest.run(data);
+
+    const auto& pnl = backtest.pnl();
+    std::cout << latency << "," << std::fixed << std::setprecision(2) << pnl.total_pnl() << ","
+              << pnl.spread_pnl() << "," << pnl.inventory_pnl() << "," << pnl.fill_count() << ","
+              << pnl.filled_shares() << "," << std::setprecision(4) << pnl.fill_ratio() << ","
+              << backtest.quotes_placed() << "," << pnl.markout_1s().all.per_share() << ","
+              << (backtest.crossed().crossed_fraction() * 100.0) << std::defaultfloat << "\n";
+  }
+
+  std::cout << "\nZero is the idealised bound and is not a realistic setting for any real\n"
+            << "participant.\n\n"
+            << "Read the fill count and the markout together, because separately they say\n"
+            << "opposite things. Fills rise as latency grows, which looks like latency\n"
+            << "helping and is not: the cancel is delayed as well as the placement, so a\n"
+            << "quote the strategy has already decided to pull stays resting and fillable\n"
+            << "for the whole window. More exposure, more fills.\n\n"
+            << "The 1 s markout is what those extra fills are worth, and it falls as latency\n"
+            << "rises. That is adverse selection appearing exactly where theory says it\n"
+            << "should: the trades you cannot pull away from are disproportionately the ones\n"
+            << "you would most have wanted to.\n";
 }
 
 void run_sweep(std::span<const std::byte> data, const Options& options) {
@@ -283,6 +355,11 @@ int main(int argc, char** argv) {
   std::cout << "  File              " << options.path << "\n";
   std::cout << "  Symbol            " << options.symbol << "\n";
 
+  if (options.latency_sweep) {
+    run_latency_sweep(file.bytes(), options);
+    return 0;
+  }
+
   if (options.sweep) {
     run_sweep(file.bytes(), options);
     return 0;
@@ -292,6 +369,11 @@ int main(int argc, char** argv) {
   std::cout << "  Quote size        " << options.size << " shares\n";
   std::cout << "  Position limit    " << options.position_limit << " shares\n";
   std::cout << "  Inventory skew    " << options.skew_ticks << " ticks at full inventory\n";
+  std::cout << "  Reaction latency  " << options.latency_us << " us";
+  if (options.latency_us == 0) {
+    std::cout << ", an idealised bound rather than a realistic setting";
+  }
+  std::cout << "\n";
 
   Backtest<> backtest(config_from(options));
   backtest.run(file.bytes());

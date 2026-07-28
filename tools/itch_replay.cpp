@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -234,6 +235,15 @@ void replay_symbol(std::span<const std::byte> data,
   const std::unique_ptr<ReplayBook> book = std::make_unique<ReplayBook>(config);
   Driver driver(*book, symbol);
 
+  // Peaks and the traded price range, tracked so the band width and the arena
+  // capacity can be justified from data rather than chosen and defended
+  // afterwards. Both defaults were originally picked as plausible round numbers,
+  // which is a weak position for a project whose whole argument is measurement.
+  std::size_t peak_live_orders = 0;
+  std::size_t peak_occupied_levels = 0;
+  std::int32_t lowest_tick = std::numeric_limits<std::int32_t>::max();
+  std::int32_t highest_tick = std::numeric_limits<std::int32_t>::min();
+
   std::size_t seen = 0;
   const ob::itch::ParseResult result =
       ob::itch::for_each_message(data, [&](const ob::itch::MessageView& message) {
@@ -242,6 +252,23 @@ void replay_symbol(std::span<const std::byte> data,
         }
         ++seen;
         driver.apply(message);
+
+        peak_live_orders = std::max<std::size_t>(peak_live_orders, book->pool().live_count());
+        peak_occupied_levels = std::max<std::size_t>(
+            peak_occupied_levels,
+            book->occupied_level_count(ob::Side::buy) + book->occupied_level_count(ob::Side::sell));
+
+        // The traded range is taken from the touch rather than from every resting
+        // price, because a band has to cover where the market goes, and a lone
+        // resting order far from the touch is what the cold path exists for.
+        if (const std::optional<ob::Ticks> best_bid = book->best_bid(); best_bid.has_value()) {
+          lowest_tick = std::min(lowest_tick, best_bid->raw());
+          highest_tick = std::max(highest_tick, best_bid->raw());
+        }
+        if (const std::optional<ob::Ticks> best_ask = book->best_ask(); best_ask.has_value()) {
+          lowest_tick = std::min(lowest_tick, best_ask->raw());
+          highest_tick = std::max(highest_tick, best_ask->raw());
+        }
       });
 
   const ob::itch::ReplayStats& stats = driver.stats();
@@ -273,7 +300,21 @@ void replay_symbol(std::span<const std::byte> data,
             << "band rebases               " << book->rebase_count() << '\n'
             << "rebases abandoned          " << book->rebase_skipped_count() << '\n'
             << "cold levels                " << book->cold_level_count() << '\n'
-            << "cold operations            " << book->cold_operation_count() << '\n';
+            << "cold operations            " << book->cold_operation_count() << "\n\n";
+
+  // The evidence for the two capacity constants, printed so they can be checked
+  // against a real symbol rather than taken on trust.
+  std::cout << "sizing evidence\n";
+  std::cout << "  peak live orders         " << peak_live_orders << " against an arena of "
+            << book->pool().capacity() << '\n';
+  std::cout << "  peak occupied levels     " << peak_occupied_levels << " against a band of "
+            << REPLAY_BAND << '\n';
+  if (highest_tick >= lowest_tick) {
+    const std::int64_t span = static_cast<std::int64_t>(highest_tick) - lowest_tick;
+    std::cout << "  touch range              " << span << " ticks (" << lowest_tick << " to "
+              << highest_tick << "), " << (static_cast<double>(span) * 100.0 / REPLAY_BAND)
+              << " percent of the band\n";
+  }
 
   const std::optional<ob::Ticks> bid = book->best_bid();
   const std::optional<ob::Ticks> ask = book->best_ask();

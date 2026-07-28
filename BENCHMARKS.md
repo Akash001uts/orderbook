@@ -547,6 +547,58 @@ this host there is one that it cannot fix:
 ./out/build/release/ob_latency_bench --file data/qqq_slice.itch --symbol QQQ --cpu 2 --warmup 2 --runs 5
 ```
 
+## The two capacity constants, derived rather than chosen
+
+The band width and the arena capacity were originally picked as plausible round
+numbers and defended afterwards. For a project whose whole argument is measurement
+that is a weak position, so `itch_replay` now reports the evidence and both are
+checked against a real symbol over a full trading day.
+
+Measured with `itch_replay --symbol QQQ` over the complete 2019-12-30 capture,
+11 958 712 messages:
+
+| | Observed | Current default | Utilisation |
+| --- | --- | --- | --- |
+| Peak live orders | 8 842 | 65 536 arena slots | 13 % |
+| Peak occupied levels | 2 604 | 65 536 band levels | 4 % |
+| Touch price range | 5 180 ticks | 65 536 band levels | 7.9 % |
+| Band rebases | 10 | n/a | rare, as designed |
+| Cold levels used | 0 | 4 096 cap | never reached |
+
+**The touch range needs reading carefully, and the first reading of it was wrong.**
+5 180 ticks is 51.80 dollars, which no liquid ETF moves in a session. QQQ traded
+around 213 that day. The span is real but it is not intraday volatility: it is the
+thin pre-open and post-close book, where a single resting order far from fair value
+is the entire touch. That is exactly the case the band has to tolerate, so the
+figure is the right one for sizing even though it is the wrong one for describing
+the market. The continuous session is far tighter: the committed opening slice
+spans 94 ticks.
+
+**What the data supports.** Ten rebases and zero cold levels across a full day says
+the current band is comfortable rather than marginal, and 7.9 percent utilisation
+says it is comfortable by a wide margin. A band of 16 384 would sit at roughly 32
+percent utilisation with rebasing absorbing the drift, and would cut the level
+array from 3 MiB to 768 KiB.
+
+The arena is the more interesting one. Peak live orders is 8 842, so the 65 536
+default carries 7.4x headroom, and the Phase 1 arena sweep already measured what
+that costs: an add is 18.8 ns at 16 384 slots and 36.0 ns at 65 536, because the
+larger working set falls out of L2. **A default of 16 384 would still hold this
+symbol's peak with 1.85x headroom and would roughly halve the cost of an add.**
+
+**Neither default is changed here, and that is a decision rather than an
+oversight.** Every published figure in this document was taken at the current
+values, so changing them silently would invalidate the lot. More substantially, one
+symbol on one day is thin evidence for a library default: QQQ is unusually liquid
+in message rate but not especially deep, and a book with more resting orders would
+exhaust a 16 384 slot arena where it fits comfortably today. The measurement is
+recorded, the trade-off is quantified, and the change is left as an explicit call
+rather than made on this evidence alone.
+
+What has changed is the justification. The constants are no longer round numbers
+with a plausible story attached; the utilisation is measured, published, and
+reproducible with one command.
+
 ## Where this design is weak
 
 This section will be populated with measured weaknesses at Phase 4. It exists now

@@ -103,10 +103,22 @@ capture, and between fills with the position held still the change is
 | Fills | 38, for 2 950 shares, of which 8 came from trade-through |
 | Quotes placed / cancelled / post-only rejected | 4 808 / 4 784 / 19 |
 | Fill ratio | 0.0061 of quoted shares |
-| Sharpe | -0.008 on 20 046 samples at a 1 s interval, not annualised |
+| Sharpe | -0.008 on 20 046 one second samples, of which 3 714 are non-zero, from 38 fills |
 
 Sharpe is deliberately not annualised. Annualising a backtest that covers part of
 one trading day would be arithmetic dressed up as a result.
+
+**It should be read as descriptive and nothing more, for a reason that a sample
+count does not capture.** The tool gates the figure on fill count rather than on
+sample count, because fills are the independent events and 38 is barely above the
+conventional minimum of thirty. Gating on samples instead would have passed
+comfortably, 3 714 non-zero out of 20 046, and stamped the number as sound.
+
+Those samples are not independent. Almost all of them are mark to market moves on a
+single position held for hours, so the series is one random walk sampled finely
+rather than a sequence of separate bets. A Sharpe over a strongly autocorrelated
+series understates the variance and so overstates itself, and no threshold on
+counts repairs that. The tool prints this caveat whether the gate passes or not.
 
 ### Markouts
 
@@ -118,20 +130,39 @@ moved in our favour after the fill.
 | 100 ms | +0.9458 | +0.5109 | +0.7976 | 38 |
 | 1 s | +0.9874 | +0.5806 | +0.8488 | 38 |
 | 10 s | +0.7560 | +0.4756 | +0.6605 | 38 |
+| 60 s | +1.8728 | -0.6692 | +1.0068 | 38 |
+| **300 s** | +0.7368 | **-2.4612** | **-0.3527** | 38 |
 
-Zero markouts were left unresolved at the end of the replay, so all three horizons
-are fully measured rather than partially.
+Zero markouts were left unresolved at the end of the replay, so every horizon is
+fully measured rather than partially.
 
-**These are positive, and that is the interesting result.** Persistently negative
-markouts would mean the strategy is being adversely selected, picked off by
-informed flow. That is not what is happening here. At every horizon out to ten
-seconds the fills are good ones. The strategy still loses badly, and the reason is
-entirely separate.
+**The last row is why the horizon set was extended, and it reverses the
+conclusion the shorter set supported.** An earlier version of this document
+reported only the first three horizons and drew the obvious inference from them:
+that the fills were individually good, that the strategy was not being adversely
+selected, and that the loss was purely an inventory problem.
+
+The first two of those were artifacts of where the measurement stopped. Carried out
+to five minutes the aggregate markout crosses into negative territory, and the sell
+side is badly negative at -2.46 per share. The strategy **is** being adversely
+selected; it simply happens on a timescale that a ten second horizon cannot see.
+
+That is a general hazard rather than a quirk of this run. A markout horizon far
+shorter than the holding period measures whether each trade was reasonable at the
+moment it happened, and is silent about the position accumulated out of those
+trades. Choosing the horizon set therefore decides what the metric is capable of
+detecting, and a set that stops early can certify a strategy that is being taken
+apart on a longer clock.
+
+**Even five minutes is not enough here**, and saying otherwise would repeat the
+same mistake one notch further out. The baseline held inventory for 5.5 hours. The
+longer horizons narrow the gap; they do not close it. The holding time is reported
+next to the markouts so the mismatch stays visible.
 
 ## What actually went wrong, and what it demonstrates
 
-The baseline loses 48 335 while capturing 2 755 of spread. **Inventory is the whole
-story**, and it is not a fill model artifact.
+The baseline loses 48 335 while capturing 2 755 of spread. **Inventory is where
+almost all of it goes**, and that part is not a fill model artifact.
 
 With skew set to zero there is no mechanism to reduce inventory. The strategy
 accumulated a long position, reached 998 shares against its 1 000 limit, and held
@@ -143,9 +174,65 @@ That the loss reconciles to the symbol's actual price move is a useful check tha
 the accounting is measuring something real rather than an artifact of the harness.
 
 The markouts and the inventory line together say something a single P&L number
-would hide: **the fills were fine and the position management was not.** Every
-individual trade looked good ten seconds later. The strategy simply had no way to
-get flat.
+would hide, though the honest version of it is more qualified than the one this
+document originally gave. **Position management is the larger failure, and the
+fills are not blameless either.** Every individual trade still looked good ten
+seconds later, and at five minutes the aggregate has turned against the strategy,
+so there is genuine adverse selection underneath the inventory problem rather than
+only an inability to get flat.
+
+The original claim here was that the fills were fine. It was drawn from a horizon
+set that stopped at ten seconds, and it did not survive extending that set. Kept
+visible rather than quietly rewritten, because the shape of the mistake, a metric
+certifying what it was not built to see, is the more useful thing to take away
+than the corrected conclusion.
+
+## Reaction latency, and what assuming it away was worth
+
+Every figure above is taken at **zero reaction latency**: the strategy's quote is
+treated as resting the instant the message that prompted it is processed. No
+participant has ever had that. It was the largest unmodelled optimism in this
+phase, larger than the uniform cancel assumption that gets far more discussion,
+because it flatters queue position on every single quote rather than adjusting one
+estimate at the margin.
+
+It is now modelled. A decision made at time T takes effect at T plus the latency,
+and **cancels are delayed as well as placements**, which turns out to be the half
+that matters. A quote the strategy has decided to pull is still resting, and still
+fillable, for the whole window.
+
+Run with `ob_strategy_backtest --latency-sweep`.
+
+| Latency | Total P&L | Fills | Shares | Fill ratio | 1 s markout | Crossed % |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 | -48 335 | 38 | 2 950 | 0.0061 | +0.85 | 0.014 |
+| 1 us | -48 335 | 38 | 2 950 | 0.0061 | +0.85 | 0.015 |
+| 5 us | -47 835 | 40 | 3 150 | 0.0064 | +0.76 | 0.017 |
+| 25 us | -47 715 | 42 | 3 371 | 0.0069 | +0.50 | 0.019 |
+| 100 us | -47 615 | 42 | 3 371 | 0.0070 | +0.56 | 0.041 |
+| 500 us | -50 221 | 46 | 3 679 | 0.0079 | +0.50 | 0.103 |
+| 1 ms | -47 021 | 53 | 4 114 | 0.0088 | +0.66 | 0.122 |
+
+**The result contradicts the prediction, which is why it was worth measuring.** The
+expectation written down before running it was that fills would fall as latency
+grew, since every order arriving during the window queues ahead of ours. Fills
+instead **rise**, 38 to 53 across the range, because the delayed cancel leaves the
+quote exposed for longer and that outweighs the queue position lost. On a strategy
+whose fill ratio is 0.6 percent, orders rarely reach the front of a queue anyway,
+so exposure time dominates queue position.
+
+**The fills get worse as they get more numerous**, which is the effect that was
+expected in the first place, appearing in the metric that measures quality rather
+than the one that counts. The 1 s markout falls from +0.85 to roughly +0.50 as
+latency rises. Trades a participant cannot pull away from are disproportionately
+the ones it would most have wanted to.
+
+Crossed time also rises by an order of magnitude, 0.014 percent to 0.122, which is
+the same phenomenon seen from the book's side: stale quotes sit inside the real
+spread for longer.
+
+Total P&L barely moves, because inventory dominates everything at this
+configuration and swamps both effects.
 
 ## Sensitivity analysis
 
@@ -212,6 +299,10 @@ assumed.
 ## Which results depend on the fill model
 
 Worth separating carefully, because not every result leans on the same assumption.
+
+**Depends on the reaction latency assumption:** the fill count and every markout.
+Measured across zero to a millisecond the fill count moves 38 to 53 and the 1 s
+markout moves +0.85 to +0.50, so neither is a property of the strategy alone.
 
 **Depends heavily on the fill model:** the fill count, the fill ratio, the spread
 capture line, and every markout. All of these are computed only from fills, and

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <deque>
@@ -24,6 +25,29 @@ struct FeeSchedule {
 constexpr std::uint64_t MARKOUT_100MS_NS = 100ULL * 1000ULL * 1000ULL;
 constexpr std::uint64_t MARKOUT_1S_NS = 1000ULL * 1000ULL * 1000ULL;
 constexpr std::uint64_t MARKOUT_10S_NS = 10ULL * 1000ULL * 1000ULL * 1000ULL;
+constexpr std::uint64_t MARKOUT_60S_NS = 60ULL * 1000ULL * 1000ULL * 1000ULL;
+constexpr std::uint64_t MARKOUT_300S_NS = 300ULL * 1000ULL * 1000ULL * 1000ULL;
+
+// The first set was 100 ms, 1 s and 10 s. Two longer horizons were added, and the
+// reason is a flaw the shorter set had rather than a wish for more numbers.
+//
+// The baseline strategy held inventory for five and a half hours. Against that, a
+// ten second markout measures something real but not the thing that lost the
+// money: it says each fill was individually reasonable and is silent about the
+// position built out of them. A set that stops at ten seconds can therefore report
+// uniformly healthy markouts for a strategy being destroyed by exactly the risk
+// markouts exist to detect.
+//
+// Sixty and three hundred seconds do not close that gap either, and pretending
+// otherwise would be worse than the original omission. They narrow it, and the
+// holding period is now reported next to them so the mismatch is visible rather
+// than implied.
+constexpr std::array<std::uint64_t, 5> MARKOUT_HORIZONS_NS{
+    MARKOUT_100MS_NS, MARKOUT_1S_NS, MARKOUT_10S_NS, MARKOUT_60S_NS, MARKOUT_300S_NS};
+
+constexpr std::array<const char*, 5> MARKOUT_LABELS{"100ms", "1s", "10s", "60s", "300s"};
+
+constexpr std::size_t MARKOUT_COUNT = MARKOUT_HORIZONS_NS.size();
 
 struct MarkoutBucket {
   double total = 0.0;
@@ -170,11 +194,15 @@ class PnlAccount {
                : static_cast<double>(filled_shares_) / static_cast<double>(quoted_shares_);
   }
 
-  [[nodiscard]] const MarkoutSet& markout_100ms() const noexcept { return markout_100ms_; }
+  [[nodiscard]] const MarkoutSet& markout(std::size_t horizon_index) const {
+    return markouts_[horizon_index];
+  }
 
-  [[nodiscard]] const MarkoutSet& markout_1s() const noexcept { return markout_1s_; }
+  [[nodiscard]] const MarkoutSet& markout_100ms() const noexcept { return markouts_[0]; }
 
-  [[nodiscard]] const MarkoutSet& markout_10s() const noexcept { return markout_10s_; }
+  [[nodiscard]] const MarkoutSet& markout_1s() const noexcept { return markouts_[1]; }
+
+  [[nodiscard]] const MarkoutSet& markout_10s() const noexcept { return markouts_[2]; }
 
   // Sharpe over the sampled P&L series, not annualised. Annualising a backtest
   // that covers part of one trading day would be arithmetic dressed up as a
@@ -202,6 +230,50 @@ class PnlAccount {
 
   [[nodiscard]] std::size_t sample_count() const noexcept { return samples_.size(); }
 
+  // Samples in which the P&L actually moved.
+  //
+  // The distinction matters more than the total does. A one second sampling
+  // interval across part of a trading day produces tens of thousands of samples,
+  // and on a strategy with a few dozen fills almost all of them are exactly zero
+  // because nothing happened in that second. Those zeros are not observations of a
+  // return, they are observations of nothing, and they collapse the denominator of
+  // any ratio computed over the series.
+  [[nodiscard]] std::size_t informative_sample_count() const {
+    std::size_t count = 0;
+    for (const double sample : samples_) {
+      if (sample != 0.0) {
+        ++count;
+      }
+    }
+    return count;
+  }
+
+  // Whether the Sharpe figure clears even the crudest bar for being readable.
+  //
+  // This exists because the honest fix for a meaningless statistic is to say it is
+  // meaningless, not to compute a more sophisticated version of it. The baseline
+  // run produces about -0.008 from 38 fills, and reporting that without a
+  // qualifier invites exactly the reading it cannot support.
+  //
+  // **The gate is on fills, not on samples, and the first version of this got that
+  // wrong.** Gating on non-zero samples passed easily, 3 714 of 20 046 in the
+  // baseline, and would have stamped the figure as sound. But those samples are
+  // not independent observations of a return: almost all of them are mark to
+  // market moves on one position that was held for hours, so the series is a
+  // random walk sampled finely rather than a sequence of independent bets. Fills
+  // are the independent events, and thirty is the conventional rule of thumb below
+  // which a mean and a standard deviation stop describing anything.
+  //
+  // Clearing this bar is necessary and nowhere near sufficient, which is why the
+  // autocorrelation caveat is printed whether it passes or not. A Sharpe over a
+  // strongly autocorrelated series understates the variance and therefore
+  // overstates itself, and no threshold on counts repairs that.
+  static constexpr std::size_t MIN_INDEPENDENT_EVENTS = 30;
+
+  [[nodiscard]] bool sharpe_clears_minimum_events() const {
+    return fill_count_ >= MIN_INDEPENDENT_EVENTS;
+  }
+
   // Markouts still waiting for their horizon to elapse when the replay ended.
   // Reported rather than silently dropped: a run whose 10 s markout is mostly
   // unresolved has not measured a 10 s markout.
@@ -211,9 +283,7 @@ class PnlAccount {
   struct PendingMarkout {
     Fill fill;
     double signed_quantity = 0.0;
-    bool done_100ms = false;
-    bool done_1s = false;
-    bool done_10s = false;
+    std::array<bool, MARKOUT_COUNT> done{};
   };
 
   static void record(MarkoutSet& set, const PendingMarkout& pending, double value) {
@@ -226,68 +296,38 @@ class PnlAccount {
     set.all.shares += pending.fill.quantity;
   }
 
+  // Walks the pending fills and records every horizon that has now elapsed.
+  //
+  // Fills are appended in timestamp order, so elapsed time decreases along the
+  // deque and the walk can stop at the first entry too recent for even the
+  // shortest horizon. Entries are popped only once every horizon has been
+  // recorded, which is why the front can linger while later ones are still being
+  // filled in behind it.
+  //
+  // This replaced a hand-unrolled version with one branch per horizon and a
+  // separate tail walk to work around the front blocking. Adding two horizons to
+  // that shape would have meant four more branches in two places.
   void resolve_markouts(std::uint64_t now_ns) {
-    while (!pending_.empty()) {
-      PendingMarkout& pending = pending_.front();
+    for (PendingMarkout& pending : pending_) {
       const std::uint64_t elapsed =
           now_ns > pending.fill.timestamp_ns ? now_ns - pending.fill.timestamp_ns : 0;
+      if (elapsed < MARKOUT_HORIZONS_NS[0]) {
+        break;
+      }
 
       const auto fill_price = static_cast<double>(pending.fill.price.raw());
       const double value = pending.signed_quantity * (mid_ - fill_price);
 
-      if (!pending.done_100ms && elapsed >= MARKOUT_100MS_NS) {
-        record(markout_100ms_, pending, value);
-        pending.done_100ms = true;
+      for (std::size_t index = 0; index < MARKOUT_COUNT; ++index) {
+        if (!pending.done[index] && elapsed >= MARKOUT_HORIZONS_NS[index]) {
+          record(markouts_[index], pending, value);
+          pending.done[index] = true;
+        }
       }
-      if (!pending.done_1s && elapsed >= MARKOUT_1S_NS) {
-        record(markout_1s_, pending, value);
-        pending.done_1s = true;
-      }
-      if (!pending.done_10s && elapsed >= MARKOUT_10S_NS) {
-        record(markout_10s_, pending, value);
-        pending.done_10s = true;
-      }
-
-      if (pending.done_10s) {
-        pending_.pop_front();
-        continue;
-      }
-      // Fills are appended in timestamp order, so once the front is not ready
-      // neither is anything behind it.
-      if (!pending.done_100ms) {
-        return;
-      }
-      // The front still owes a longer horizon. Walk the rest for their shorter
-      // ones rather than blocking behind it.
-      resolve_tail(now_ns);
-      return;
     }
-  }
 
-  void resolve_tail(std::uint64_t now_ns) {
-    for (std::size_t index = 1; index < pending_.size(); ++index) {
-      PendingMarkout& pending = pending_[index];
-      const std::uint64_t elapsed =
-          now_ns > pending.fill.timestamp_ns ? now_ns - pending.fill.timestamp_ns : 0;
-      if (elapsed < MARKOUT_100MS_NS) {
-        return;
-      }
-
-      const auto fill_price = static_cast<double>(pending.fill.price.raw());
-      const double value = pending.signed_quantity * (mid_ - fill_price);
-
-      if (!pending.done_100ms) {
-        record(markout_100ms_, pending, value);
-        pending.done_100ms = true;
-      }
-      if (!pending.done_1s && elapsed >= MARKOUT_1S_NS) {
-        record(markout_1s_, pending, value);
-        pending.done_1s = true;
-      }
-      if (!pending.done_10s && elapsed >= MARKOUT_10S_NS) {
-        record(markout_10s_, pending, value);
-        pending.done_10s = true;
-      }
+    while (!pending_.empty() && pending_.front().done[MARKOUT_COUNT - 1U]) {
+      pending_.pop_front();
     }
   }
 
@@ -320,9 +360,7 @@ class PnlAccount {
   std::vector<double> samples_;
 
   std::deque<PendingMarkout> pending_;
-  MarkoutSet markout_100ms_;
-  MarkoutSet markout_1s_;
-  MarkoutSet markout_10s_;
+  std::array<MarkoutSet, MARKOUT_COUNT> markouts_{};
 };
 
 }  // namespace ob::strategy

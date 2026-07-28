@@ -1,8 +1,10 @@
 #pragma once
 
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <span>
 #include <string>
@@ -47,6 +49,12 @@ struct BacktestConfig {
   FeeSchedule fees;
   std::uint32_t arena_capacity = 1U << 17;
   std::uint64_t sharpe_sample_interval_ns = 1000ULL * 1000ULL * 1000ULL;
+
+  // Nanoseconds between the strategy deciding and the venue acting on it, applied
+  // to placements and cancels alike. Zero is the idealised bound rather than a
+  // realistic setting; see reconcile_side for why it is the largest single
+  // optimism a backtest can carry, and STRATEGY.md for what it costs measured.
+  std::uint64_t latency_ns = 0;
 };
 
 // Wires the replayed venue book, the strategy, the queue estimator, and the
@@ -119,6 +127,16 @@ class Backtest {
     }
   }
 
+  // One decision waiting out its latency window.
+  struct PendingAction {
+    std::uint64_t effective_ns = 0;
+    enum class Kind : std::uint8_t { place, cancel };
+    Kind kind = Kind::place;
+    Side side = Side::buy;
+    Ticks price{};
+    OrderId id{};
+  };
+
   struct OrderSnapshot {
     bool present = false;
     Side side = Side::buy;
@@ -172,6 +190,10 @@ class Backtest {
 
   void on_message(const itch::MessageView& message) {
     const std::uint64_t timestamp = message.timestamp();
+
+    // Anything the strategy decided earlier whose latency window has now elapsed
+    // reaches the book before this message does.
+    flush_pending(timestamp);
 
     const std::optional<OrderId> reference = referenced_order(message);
     OrderSnapshot before;
@@ -314,20 +336,114 @@ class Backtest {
   // every message would produce a cancel rate no venue would tolerate and would
   // reset queue position constantly, which is the single most expensive thing a
   // market maker can do to itself.
+  // Reaction latency, and why it is the most important thing this backtest models
+  // that a naive one does not.
+  //
+  // A decision made from the book as it stands at time T cannot take effect at T.
+  // A real participant sees the message later, decides later, and its order
+  // reaches the matching engine later still. Everything that happens in between
+  // happens without the order being there, and every order that arrived during the
+  // gap is ahead of it in the queue.
+  //
+  // Modelling it as zero was the single largest unmodelled optimism in Phase 5,
+  // larger than the uniform cancel assumption that gets far more discussion,
+  // because it flatters queue position on every single quote rather than
+  // marginally adjusting one estimate.
+  //
+  // Cancels are delayed too, and that half turned out to dominate. A quote the
+  // strategy has decided to pull is still resting, and still fillable, for the
+  // whole window. Delaying only the placement would model a participant that can
+  // retract instantly but not act instantly, which is backwards.
+  //
+  // The measured effect is not the one predicted before running it, which is
+  // worth recording. The expectation was that fills would fall as latency grew,
+  // because orders arriving during the window queue ahead of ours. Fills instead
+  // **rise**, 38 at zero latency to 53 at a millisecond, because the delayed
+  // cancel leaves the quote exposed for longer and that outweighs the queue
+  // position lost. What degrades is fill quality: the 1 s markout falls from 0.85
+  // to roughly 0.5 per share over the same range. That is adverse selection
+  // appearing where theory says it should, since the trades a participant cannot
+  // pull away from are disproportionately the ones it would most want to.
   void reconcile_side(Side side, bool want, Ticks price, std::uint64_t timestamp) {
+    const auto index = static_cast<std::size_t>(side);
     const std::optional<StrategyOrder> resting = resting_on(side);
 
     if (resting.has_value()) {
       if (want && resting->price == price) {
         return;
       }
-      cancel(resting->id);
+      if (!cancel_in_flight_[index]) {
+        schedule(PendingAction{.effective_ns = timestamp + config_.latency_ns,
+                               .kind = PendingAction::Kind::cancel,
+                               .side = side,
+                               .price = Ticks{},
+                               .id = resting->id});
+      }
+      // The replacement is scheduled below rather than skipped, so it lands
+      // behind its own cancel in the queue, which is the real ordering.
     }
 
-    if (!want) {
+    if (!want || place_in_flight_[index]) {
       return;
     }
-    place(side, price, timestamp);
+
+    schedule(PendingAction{.effective_ns = timestamp + config_.latency_ns,
+                           .kind = PendingAction::Kind::place,
+                           .side = side,
+                           .price = price,
+                           .id = OrderId{}});
+  }
+
+  // Owns the in-flight flags outright, so that a caller cannot set one and then
+  // have the immediate path clear it, which is precisely the bug the first
+  // version of this had: the flags stuck true after the first quote and the
+  // strategy never traded again.
+  void schedule(const PendingAction& action) {
+    if (config_.latency_ns == 0) {
+      // Zero latency is the idealised bound rather than a realistic setting, and
+      // it is kept exactly reachable so the cost of latency reads off as a
+      // difference against it. Nothing is ever queued, so the deferred path
+      // cannot perturb the baseline.
+      apply(action, action.effective_ns);
+      return;
+    }
+    set_in_flight(action, true);
+    pending_.push_back(action);
+  }
+
+  void set_in_flight(const PendingAction& action, bool value) {
+    const auto index = static_cast<std::size_t>(action.side);
+    if (action.kind == PendingAction::Kind::cancel) {
+      cancel_in_flight_[index] = value;
+    } else {
+      place_in_flight_[index] = value;
+    }
+  }
+
+  // Applies every action whose latency window has elapsed by `now_ns`. Called
+  // before the message at that timestamp is applied, so the strategy's order
+  // reaches the book just ahead of it, which is the closest this can get to the
+  // order arriving during the gap.
+  void flush_pending(std::uint64_t now_ns) {
+    while (!pending_.empty() && pending_.front().effective_ns <= now_ns) {
+      const PendingAction action = pending_.front();
+      pending_.pop_front();
+      set_in_flight(action, false);
+      apply(action, now_ns);
+    }
+  }
+
+  void apply(const PendingAction& action, std::uint64_t now_ns) {
+    if (action.kind == PendingAction::Kind::cancel) {
+      cancel(action.id);
+      return;
+    }
+    // The order may have been filled or pulled while this was in flight, in
+    // which case placing a second one on the same side would double the
+    // strategy's exposure.
+    if (!resting_on(action.side).has_value()) {
+      place(action.side, action.price, now_ns);
+    }
   }
 
   [[nodiscard]] std::optional<StrategyOrder> resting_on(Side side) const {
@@ -400,6 +516,10 @@ class Backtest {
   // reference from the capture, which are assigned by NASDAQ from a separate
   // space and are not bounded below this.
   std::uint64_t next_order_id_ = 1ULL << 62U;
+
+  std::deque<PendingAction> pending_;
+  std::array<bool, 2> place_in_flight_{};
+  std::array<bool, 2> cancel_in_flight_{};
 
   std::uint64_t quotes_placed_ = 0;
   std::uint64_t quotes_cancelled_ = 0;

@@ -1,5 +1,6 @@
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -7,6 +8,9 @@
 #include "ob/book.hpp"
 #include "ob/types.hpp"
 
+#include "itch/mapped_file.hpp"
+
+#include "strategy/backtest.hpp"
 #include "strategy/market_maker.hpp"
 #include "strategy/pnl.hpp"
 #include "strategy/queue_position.hpp"
@@ -330,6 +334,64 @@ TEST(StrategyPnl, ASellMarkoutIsNegativeWhenTheMarketRises) {
   EXPECT_DOUBLE_EQ(pnl.markout_100ms().sell.total, -30.0);
 }
 
+TEST(StrategyPnl, LongerHorizonsResolveIndependentlyOfShorterOnes) {
+  PnlAccount pnl(ob::strategy::FeeSchedule{});
+  pnl.mark(100.0, 0);
+
+  Fill buy;
+  buy.side = Side::buy;
+  buy.price = Ticks{100};
+  buy.quantity = 10;
+  buy.timestamp_ns = 0;
+  pnl.on_fill(buy, true);
+
+  // The 10 s horizon resolves against a mid of 105, the 300 s one against 90.
+  // A horizon that latched the wrong mid would show the same value twice.
+  pnl.mark(105.0, ob::strategy::MARKOUT_10S_NS);
+  pnl.mark(90.0, ob::strategy::MARKOUT_300S_NS);
+
+  EXPECT_DOUBLE_EQ(pnl.markout(2).all.per_share(), 5.0);
+  EXPECT_DOUBLE_EQ(pnl.markout(4).all.per_share(), -10.0);
+  EXPECT_EQ(pnl.unresolved_markouts(), 0U);
+}
+
+// The reason the longer horizons were added: a set that stops early can report a
+// uniformly healthy markout for fills that are in fact adversely selected on the
+// timescale the position is actually held.
+TEST(StrategyPnl, AShortHorizonCanHideAdverseSelectionThatALongOneShows) {
+  PnlAccount pnl(ob::strategy::FeeSchedule{});
+  pnl.mark(100.0, 0);
+
+  Fill buy;
+  buy.side = Side::buy;
+  buy.price = Ticks{100};
+  buy.quantity = 10;
+  buy.timestamp_ns = 0;
+  pnl.on_fill(buy, true);
+
+  // Favourable at one second, badly against us by five minutes.
+  pnl.mark(102.0, ob::strategy::MARKOUT_1S_NS);
+  pnl.mark(102.0, ob::strategy::MARKOUT_10S_NS);
+  pnl.mark(102.0, ob::strategy::MARKOUT_60S_NS);
+  pnl.mark(80.0, ob::strategy::MARKOUT_300S_NS);
+
+  EXPECT_GT(pnl.markout(1).all.per_share(), 0.0);
+  EXPECT_LT(pnl.markout(4).all.per_share(), 0.0);
+}
+
+TEST(StrategyPnl, SharpeIsGatedOnFillsRatherThanOnSampleCount) {
+  PnlAccount pnl(ob::strategy::FeeSchedule{});
+
+  // Many samples, no fills. Sample count alone would pass; the gate must not.
+  for (std::uint64_t step = 0; step < 500; ++step) {
+    pnl.mark(100.0 + static_cast<double>(step % 7U), step * ob::strategy::MARKOUT_1S_NS);
+    pnl.sample_if_due(step * ob::strategy::MARKOUT_1S_NS, ob::strategy::MARKOUT_1S_NS);
+  }
+
+  EXPECT_GT(pnl.sample_count(), 30U);
+  EXPECT_FALSE(pnl.sharpe_clears_minimum_events());
+}
+
 // ---------------------------------------------------------------------------
 // The market maker.
 // ---------------------------------------------------------------------------
@@ -406,6 +468,78 @@ TEST(StrategyMaker, NoQuotesWithoutATwoSidedMarket) {
   const auto crossed = maker.desired(Ticks{110}, Ticks{100}, 0);
   EXPECT_FALSE(crossed.want_bid);
   EXPECT_FALSE(crossed.want_ask);
+}
+
+// ---------------------------------------------------------------------------
+// Reaction latency, end to end against the committed real capture.
+//
+// Unit testing this in isolation would need a synthetic ITCH stream, and the
+// property worth asserting is not that one order is deferred but that deferring
+// every decision changes the outcome of a whole replay. So it runs the real
+// fixture twice and compares.
+// ---------------------------------------------------------------------------
+
+[[nodiscard]] std::filesystem::path real_capture_path() {
+  return std::filesystem::path(OB_TEST_SOURCE_DIR).parent_path() / "data" / "qqq_slice.itch";
+}
+
+ob::strategy::BacktestConfig latency_config(std::uint64_t latency_ns) {
+  ob::strategy::BacktestConfig config;
+  config.symbol = "QQQ";
+  config.maker.quote_offset_ticks = 1;
+  config.maker.quote_size = 100;
+  config.maker.position_limit = 1000;
+  config.latency_ns = latency_ns;
+  return config;
+}
+
+TEST(StrategyLatency, DeferringEveryDecisionChangesTheOutcome) {
+  const std::filesystem::path path = real_capture_path();
+  if (!std::filesystem::exists(path)) {
+    GTEST_SKIP() << "no real capture fixture at " << path.string();
+  }
+
+  ob::itch::MappedFile mapped;
+  if (!mapped.open(path.string())) {
+    FAIL() << mapped.error();
+  }
+
+  ob::strategy::Backtest<> instant(latency_config(0));
+  instant.run(mapped.bytes());
+
+  ob::strategy::Backtest<> delayed(latency_config(1000ULL * 1000ULL));
+  delayed.run(mapped.bytes());
+
+  ASSERT_GT(instant.pnl().fill_count(), 0U) << "the zero latency arm must actually trade";
+  ASSERT_GT(delayed.pnl().fill_count(), 0U) << "the delayed arm must actually trade";
+
+  // The direction is the measured one and it is not the obvious one. Delaying
+  // cancels as well as placements leaves a quote the strategy has decided to pull
+  // still resting and still fillable, and that outweighs the queue position it
+  // loses. See the latency sweep in STRATEGY.md.
+  EXPECT_GT(delayed.pnl().fill_count(), instant.pnl().fill_count())
+      << "a delayed cancel should leave the quote exposed for longer, not shorter";
+}
+
+TEST(StrategyLatency, ZeroLatencyLeavesNothingPending) {
+  const std::filesystem::path path = real_capture_path();
+  if (!std::filesystem::exists(path)) {
+    GTEST_SKIP() << "no real capture fixture at " << path.string();
+  }
+
+  ob::itch::MappedFile mapped;
+  if (!mapped.open(path.string())) {
+    FAIL() << mapped.error();
+  }
+
+  // Zero latency has to remain exactly the old behaviour, because every published
+  // baseline figure was taken with it and the deferred path must not perturb them.
+  ob::strategy::Backtest<> instant(latency_config(0));
+  instant.run(mapped.bytes());
+
+  EXPECT_EQ(instant.pnl().fill_count(), 38U);
+  EXPECT_EQ(instant.pnl().filled_shares(), 2950U);
+  EXPECT_EQ(instant.pnl().trade_through_fills(), 8U);
 }
 
 TEST(StrategyMaker, QuotesNeverCrossEachOther) {
