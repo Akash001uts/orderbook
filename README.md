@@ -94,16 +94,16 @@ process under the same conditions, so the ratio is the durable part:
 
 | Operation | Flat book | `std::map` book | |
 | --- | --- | --- | --- |
-| Add | 23.5 ns | 75.4 ns | 3.2x faster |
-| Cancel | 15.4 ns | 71.8 ns | 4.7x faster |
-| Match, one level consumed | 42.8 ns | 75.5 ns | 1.8x faster |
-| Best bid query | **0.31 ns** | 4.66 ns | below the harness noise floor |
+| Add | 30.5 ns | 84.7 ns | 2.8x faster |
+| Cancel | 11.5 ns | 61.1 ns | 5.3x faster |
+| Match, one level consumed | 32.2 ns | 67.4 ns | 2.1x faster |
+| Best bid query | **0.26 ns** | 4.45 ns | below the harness noise floor |
 
 The last row has a history worth knowing. The flat book originally **lost** this
 query, 10.2 ns against the tree's 5.38 ns, because `std::map` caches its extreme
 element while a bitmap descent is three dependent loads. That was reported rather
 than buried, and then fixed by caching the final answer and repairing it lazily.
-The 0.31 ns is only about 0.14 ns above an empty loop, so the accurate claim is
+The 0.26 ns is only about 0.10 ns above an empty loop, so the accurate claim is
 that the query is below what the harness can resolve rather than that it costs any
 particular number; a dedicated noise-floor benchmark exists to make that
 distinction checkable.
@@ -113,12 +113,11 @@ available host exposes hardware performance counters: the flat book allocates
 **0** times per add, the `std::map` book **2.064**, a figure that decomposes
 exactly into a list node, a hash node, and one map node per new level.
 
-Both arms run at the library default arena of 18 432 slots, which is derived from
+Both arms run at the library default arena of 16 384 slots, which is derived from
 measured depth rather than chosen: a full day of QQQ peaks at 8 842 live orders and
-the default carries 2.08x headroom over it. Absolute figures come from paired runs
-taken back to back, because this machine drifted by up to 2.6x across a session on
-an unchanged binary. The ratios survive that; the nanoseconds are one afternoon's
-reading.
+the default carries 1.85x headroom over it. Absolute figures come from paired runs,
+because this machine drifted by up to 2.6x across a session on an unchanged binary.
+The ratios survive that; the nanoseconds are one afternoon's reading.
 
 **Replaying a real NASDAQ capture**, per message end to end, on a pinned core with
 an invariance-verified TSC:
@@ -136,7 +135,7 @@ timestamps per message cost enough to change the answer by a factor of 3.5.
 | --- | --- |
 | `sizeof(Order)` | 40 bytes, 32-bit arena indices rather than pointers |
 | `sizeof(PriceLevel)` | 24 bytes, 2.67 levels per cache line |
-| Footprint at defaults | about 4.5 MiB: 3 MiB band, 16 KiB bitmaps, 0.70 MiB arena, 0.75 MiB id map |
+| Footprint at defaults | about 4.0 MiB: 3 MiB band, 16 KiB bitmaps, 0.63 MiB arena, 0.38 MiB id map |
 | Id map | load factor 0.50, mean probe count 1.0, lookup 2.3 ns |
 
 The same replay was run under GCC 16.1.0 on Windows and GCC 13.3.0 on Linux. Two

@@ -154,16 +154,29 @@ class Book {
   //
   // **The derivation.** Replaying the full 2019-12-30 NASDAQ capture for QQQ, an
   // ordinary liquid ETF, peaks at 8 842 live orders. `itch_replay` reports this,
-  // so it is reproducible rather than asserted. 18 432 is the smallest multiple of
-  // 1024 giving at least twice that, landing at 2.08x headroom.
+  // so it is reproducible rather than asserted. 16 384 carries 1.85x headroom over
+  // that.
   //
-  // **The consequence, checked not assumed.** Each order costs 40 bytes of arena
-  // plus about 24 bytes of id map at the design load factor, so 18 432 orders is
-  // roughly 1.45 MiB of working set. That fits inside the 2.5 MiB L2 of the
-  // machine the published benchmarks were taken on, which matters because the
-  // Phase 1 sweep measured an add at about 18 ns while the working set fits L2 and
-  // about 130 ns when it does not. Oversizing is not free headroom, it is a seven
-  // times slowdown on every operation.
+  // **Why not more.** The id map rounds its capacity to a power of two at or above
+  // twice the arena, so 16 384 sits in the 32 768 slot bucket while anything above
+  // it jumps to 65 536. Going to 18 432 for a round 2x headroom would double the id
+  // map to buy 2 048 slots. The cost of headroom here is a step function rather than
+  // a slope, and this sits on the cheap side of the step, so it is the efficient
+  // point rather than merely a smaller one.
+  //
+  // **The consequence, checked not assumed, and it is smaller than it looks.** Each
+  // order costs 40 bytes of arena plus about 24 of id map at the design load factor,
+  // so 16 384 orders is roughly 1.0 MiB of working set, inside the 2.5 MiB L2 of the
+  // machine the benchmarks were taken on.
+  //
+  // How much that is worth depends on the machine's state, which is worth stating
+  // because a single figure here would be misleading. The arena sweep was run twice.
+  // On a quiet machine 16 384 measures 15.4 ns against 16.2 at the old 65 536
+  // default, a 5 percent difference. On a loaded one the same comparison is 20.0
+  // against 26.9, a 35 percent difference. The ordering never changes and smaller is
+  // never worse, but this is cache pressure, and how much cache pressure costs
+  // depends on what else is competing for the cache. The far end of the curve is
+  // unambiguous in both: 2^20 slots costs four to eight times a resident arena.
   //
   // **This is deliberately not derived from the running machine's cache**, which
   // is the obvious next step and is wrong. Capacity decides whether an order is
@@ -178,7 +191,7 @@ class Book {
   // explicitly rather than rely on the default.
   struct Config {
     PriceConfig price{};
-    std::uint32_t arena_capacity = 18432;
+    std::uint32_t arena_capacity = 16384;
     std::size_t max_cold_levels_per_side = 4096;
     Ticks initial_center{0};
   };

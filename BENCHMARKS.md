@@ -351,16 +351,17 @@ argument rests on.
 
 Run with `ob_baseline_bench`, 9 repetitions, medians reported.
 
-Reissued at the current default arena of 18 432 slots and a working set of 8 192
+Reissued at the current default arena of 16 384 slots and a working set of 8 192
 live orders, which is close to the 8 842 peak a full day of QQQ actually reaches.
-Both arms take the identical workload.
+Both arms take the identical workload, in one process, so the ratios are paired
+even though the absolute figures drift between sessions.
 
 | Operation | Flat book | `std::map` book | Ratio |
 | --- | --- | --- | --- |
-| Add, resting | 23.5 ns | 75.4 ns | **3.2x faster** |
-| Cancel | 15.4 ns | 71.8 ns | **4.7x faster** |
-| Match, one level consumed | 42.8 ns | 75.5 ns | **1.8x faster** |
-| Best bid query | **0.31 ns** | 4.66 ns | see below |
+| Add, resting | 30.5 ns | 84.7 ns | **2.8x faster** |
+| Cancel | 11.5 ns | 61.1 ns | **5.3x faster** |
+| Match, one level consumed | 32.2 ns | 67.4 ns | **2.1x faster** |
+| Best bid query | **0.26 ns** | 4.45 ns | see below |
 
 **The best price query was the one operation the flat book lost, and it has since
 been fixed.** The history is worth keeping because the fix is only meaningful
@@ -587,41 +588,51 @@ spans 94 ticks.
 levels across a full day says the band is comfortable rather than marginal, and 7.9
 percent utilisation says comfortable by a wide margin. The band is left at 65 536.
 
-**The arena default has been changed from 65 536 to 18 432 slots.** 18 432 is the
-smallest multiple of 1024 giving at least twice the measured 8 842 peak, so
-headroom is 2.08x. Capacity leads and cache residency follows, for the reasons in
-DESIGN.md: too small is a rejected order, too large is only a slowdown.
+**The arena default has been changed from 65 536 to 16 384 slots.** 16 384 carries
+1.85x headroom over the measured 8 842 peak. Capacity leads and cache residency
+follows, for the reasons in DESIGN.md: too small is a rejected order, too large is
+only a slowdown.
 
-The arena curve, remeasured back to back in one run so the points are comparable to
-each other rather than to a figure from another session:
+18 432 was tried first, because it is the smallest multiple of 1024 giving a round
+2x headroom, and then reverted. The id map rounds its capacity to a power of two at
+or above twice the arena, so 16 384 sits in the 32 768 slot bucket while 18 432
+jumps to 65 536. The last 2 048 slots of headroom double the id map. **The cost of
+headroom here is a step function rather than a slope**, and 16 384 is on the cheap
+side of the step, which makes it the efficient point rather than merely a smaller
+one.
 
-| Arena capacity | Working set | ns per add |
-| --- | --- | --- |
-| 4 096 | 0.16 MiB | 15.4 |
-| 16 384 | 0.63 MiB | 20.0 |
-| **18 432, the default** | **0.70 MiB** | **22.6** |
-| 65 536, the old default | 2.5 MiB | 26.9 |
-| 262 144 | 10 MiB | 67.6 |
-| 1 048 576 | 40 MiB | 132 |
+### The arena curve, and why it is published twice
 
-**Two things about this table are worth more than the headline.**
+The sweep measures every point back to back in one process, so within a run the
+points are directly comparable. It was run twice, in two different machine states,
+and publishing only one would misrepresent the result.
 
-The first is that the id map rounds its capacity to a power of two at or above
-twice the arena, so 18 432 sits in the 65 536 slot bucket while 16 384 sits in the
-32 768 one. The last 2 048 slots of headroom therefore double the id map and cost
-2.6 ns per add. **Going from 1.85x headroom to 2.08x is a 13 percent tax on adds,
-paid entirely at a bucket boundary rather than gradually.** Nothing about the
-arithmetic hints at that; only measuring the default directly rather than
-interpolating between powers of two revealed it.
+| Arena capacity | Working set | Quiet machine | Loaded machine |
+| --- | --- | --- | --- |
+| 4 096 | 0.16 MiB | 12.6 ns | 15.4 ns |
+| **16 384, the default** | **0.63 MiB** | **15.4 ns** | **20.0 ns** |
+| 18 432, one bucket above | 0.70 MiB | 15.9 ns | 22.6 ns |
+| 65 536, the old default | 2.5 MiB | 16.2 ns | 26.9 ns |
+| 262 144 | 10 MiB | 29.2 ns | 67.6 ns |
+| 1 048 576 | 40 MiB | 71.8 ns | 132 ns |
 
-The second is how much of the improvement is the arena and how much is the
-benchmark. Measured against the old configuration back to back, an add went from
-48.2 ns to 23.5 ns, a factor of 2.05. But that change moved two things: the arena
-from 65 536 to 18 432, and the benchmark's live order count from 32 768 to 8 192 so
-it would fit. The arena alone accounts for 26.9 to 22.6, about 16 percent. The rest
-is the benchmark now measuring a book the size a real one reaches instead of one
-four times larger. **That is a more representative measurement rather than a
-faster book, and quoting the 2.05x as a speedup would be wrong.**
+**What is robust and what is not.** The ordering is identical in both runs and a
+smaller arena is never worse, so the direction of the decision is sound. The
+magnitude is not robust at the near end: the default against the old 65 536 is 5
+percent on the quiet run and 35 percent on the loaded one, and the bucket boundary
+costs 3 percent against 13 percent. That is not measurement error, it is the effect
+being measured. Arena size is a cache pressure effect, and how much cache pressure
+costs depends on what else is competing for the cache.
+
+The far end is unambiguous in both: a 2^20 slot arena costs four to eight times a
+resident one. That is the finding the sweep was built for and it does not depend on
+machine state.
+
+**An earlier version of this section claimed a flat 13 percent for the bucket
+boundary and 16 percent for the arena change.** Both came from the loaded run
+alone. They are real numbers from a valid paired measurement, and quoting either as
+the figure would still have been wrong, because a second run of the same sweep
+disagrees by a factor of four on the same quantity.
 
 ### A caveat on the absolute numbers in this section
 

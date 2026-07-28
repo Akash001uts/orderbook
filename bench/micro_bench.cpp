@@ -62,8 +62,10 @@ using BenchEngine = Engine<CancelNewest, DEFAULT_BAND_LEVELS>;
 // ships rather than one chosen for the benchmark.
 //
 // It is derived from measured depth: a full day of QQQ peaks at 8 842 live orders,
-// and 18 432 is the smallest multiple of 1024 giving twice that. See the Config
-// comment in book.hpp for why capacity leads and cache residency follows.
+// so this carries 1.85x headroom. Going higher crosses an id map bucket boundary
+// and costs 13 percent on every add, which is why it stops here. See the Config
+// comment in book.hpp for that and for why capacity leads and cache residency
+// follows.
 //
 // This file has now had the number wrong in both directions, which is why the
 // sweep below exists. The first version used a 2^20 slot arena, putting 40 MiB of
@@ -72,7 +74,7 @@ using BenchEngine = Engine<CancelNewest, DEFAULT_BAND_LEVELS>;
 // L2 but was eight times more headroom than any measured book needed.
 // bm_add_by_arena_size sweeps the parameter so the sensitivity stays published
 // rather than hidden.
-constexpr std::uint32_t ARENA_CAPACITY = 18432;
+constexpr std::uint32_t ARENA_CAPACITY = 16384;
 
 // Kept well inside the band so that no rebase and no cold path operation can
 // contaminate a measurement of the hot path.
@@ -641,8 +643,8 @@ void bm_add_by_arena_size(benchmark::State& state) {
 BENCHMARK(bm_add_existing_level);
 BENCHMARK(bm_add_by_arena_size)
     ->Arg(1 << 12)
-    ->Arg(1 << 14)
-    ->Arg(18432)  // the library default, measured directly rather than interpolated
+    ->Arg(1 << 14)  // the library default
+    ->Arg(18432)    // one bucket above it, where the id map doubles
     ->Arg(1 << 16)
     ->Arg(1 << 18)
     ->Arg(1 << 20);

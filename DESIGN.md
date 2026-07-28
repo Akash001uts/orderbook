@@ -454,7 +454,7 @@ caller could handle.
 
 ## Arena capacity is a capacity decision, then a cache decision
 
-**Decision.** The default is 18 432 slots, derived from measured book depth. It was
+**Decision.** The default is 16 384 slots, derived from measured book depth. It was
 65 536 and the change is recent.
 
 **Why capacity has to lead.** The two constraints fail in different ways. Too small
@@ -464,23 +464,27 @@ failure. A number chosen for cache residency that cannot hold the book is simply
 wrong, so depth sets it and cache residency is checked afterwards.
 
 **The derivation.** Replaying the full 2019-12-30 capture for QQQ peaks at 8 842
-live orders, reported by `itch_replay` so it is reproducible. 18 432 is the
-smallest multiple of 1024 giving at least twice that, at 2.08x headroom.
+live orders, reported by `itch_replay` so it is reproducible. 16 384 carries 1.85x
+headroom over that, and the next step up is expensive for reasons below.
 
-**The cost, checked rather than assumed.** Each order is 40 bytes of arena plus
-about 24 of id map at the design load factor, so 18 432 orders is roughly 1.45 MiB,
-inside the 2.5 MiB L2 of the measurement machine. Measured back to back, an add
-costs 22.6 ns at this capacity against 26.9 ns at the old 65 536 and 132 ns at
-2^20, with the algorithmic work identical at every point. Oversizing is not free
-headroom; the far end of that curve is a six times slowdown on every operation.
+**The cost, checked rather than assumed, and smaller at the near end than it
+looks.** Each order is 40 bytes of arena plus about 24 of id map at the design load
+factor, so 16 384 orders is roughly 1.0 MiB, inside the 2.5 MiB L2 of the
+measurement machine. The sweep was run in two machine states and they disagree on
+magnitude: against the old 65 536 default the saving is 5 percent on a quiet
+machine and 35 percent on a loaded one. The ordering is identical in both and
+smaller is never worse, but this is a cache pressure effect and what cache pressure
+costs depends on what else is competing. The far end is unambiguous either way: a
+2^20 arena costs four to eight times a resident one.
 
 **One thing the derivation exposed that a round number would have hidden.** The id
-map rounds its capacity up to a power of two at or above twice the arena, so 18 432
-lands in the 65 536 slot bucket while 16 384 sits in the 32 768 one. The last 2 048
-slots of headroom therefore double the id map and cost about 2.6 ns per add, since
-16 384 measures 20.0 ns against 18 432's 22.6. Going from 1.85x headroom to 2.08x
-is a 13 percent tax on adds, paid entirely at a bucket boundary rather than
-gradually. That is a real trade and it is recorded rather than absorbed silently.
+map rounds its capacity up to a power of two at or above twice the arena, so 16 384
+sits in the 32 768 slot bucket while 18 432 jumps to 65 536. The last 2 048 slots of
+headroom therefore double the id map. 18 432 was tried, for the round 2x headroom,
+and reverted: the cost of headroom here is a step function rather than a slope, and
+16 384 is on the cheap side of the step. How large the step is depends on machine
+state, 3 percent quiet against 13 percent loaded, which is itself the reason the
+sweep is published twice in BENCHMARKS.md.
 
 **Not derived from the running machine's cache**, which is the obvious next step
 and is wrong. Capacity decides whether an order is accepted, so sizing it from
