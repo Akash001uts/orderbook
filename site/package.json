@@ -1,0 +1,20 @@
+{
+  "name": "orderbook-results",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Static results site for the orderbook matching engine. Reads committed JSON artifacts, no backend.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vite": "^7.3.6"
+  },
+  "dependencies": {
+    "uplot": "^1.6.31"
+  }
+}

@@ -19,3 +19,8 @@ data/*
 !data/.gitkeep
 !data/README.md
 !data/qqq_slice.itch
+
+# The results site. Sources and artifacts are committed; the build output and the
+# dependency tree are not.
+site/node_modules/
+site/dist/
