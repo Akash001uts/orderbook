@@ -28,8 +28,8 @@ SCHEMA_VERSION = 1
 # The curated set, in the order the selector shows them. Chosen for variety rather
 # than for rank: three index ETFs that were already measured for the arena
 # derivation, three mega caps spanning a factor of three hundred in share price, two
-# mid priced high message rate semiconductors, and one low priced name. See
-# Frontend plan, phase F2. More symbols would be more scrolling, not more signal.
+# mid priced high message rate semiconductors, and one low priced name. More
+# symbols would be more scrolling, not more signal.
 DEFAULT_ORDER = ["QQQ", "SPY", "IWM", "AAPL", "MSFT", "GOOGL", "AMD", "INTC", "NIO"]
 
 DEFAULT_SYMBOL = "QQQ"

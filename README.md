@@ -14,11 +14,12 @@ rather than a smoke test.
 ## Status
 
 All six phases complete. The book, the matching engine, the ITCH 5.0 pipeline, the
-benchmark harness, the market making strategy layer, and the documentation are
-built and tested: 127 tests green on GCC and Clang across debug, release,
-relwithdebinfo, and all three sanitizers, with 14 CI jobs covering both compilers,
-every preset, all three sanitizers, clang-tidy, clang-format, the differential
-test, and a libFuzzer run. The repository is private.
+benchmark harness, the market making strategy layer, the results site, and the
+documentation are built and tested: 127 tests green on GCC and Clang across debug,
+release, relwithdebinfo, and all three sanitizers, with 15 CI jobs covering both
+compilers, every preset, all three sanitizers, clang-tidy, clang-format, the
+differential test, a libFuzzer run, and a byte for byte diff of the site's
+artifacts. The repository is private.
 
 | Phase | Scope | State |
 | --- | --- | --- |
@@ -198,6 +199,13 @@ To build with a specific compiler, set `CC` and `CXX` before configuring:
 CC=clang CXX=clang++ cmake --preset debug
 ```
 
+The results site is a separate static build that needs no C++ toolchain. It reads
+the committed JSON artifacts the tools above emit, so it runs on a fresh clone:
+
+```bash
+cd site && npm install && npm run dev
+```
+
 ## Architecture
 
 ```
@@ -239,6 +247,7 @@ optimistic model.
 | `tools/` | Synthetic ITCH generator and the replay CLI |
 | `data/` | A committed slice of a real NASDAQ capture, see `data/README.md` |
 | `scripts/` | Fetch a NASDAQ sample day, publish a full capture as release assets |
+| `site/` | The static results site and the JSON artifacts it reads, see `site/README.md` |
 
 ## Documents
 
@@ -247,6 +256,7 @@ optimistic model.
 | [DESIGN.md](DESIGN.md) | Every non-obvious decision, the alternatives considered, the reasoning, and the places this design is the wrong choice. The single source of truth. |
 | [BENCHMARKS.md](BENCHMARKS.md) | Measured results with the conditions that produced them, and what is wrong with them. |
 | [ROADMAP.md](ROADMAP.md) | Agreed but deferred work, and what is deliberately kept cheap. |
+| [site/README.md](site/README.md) | The results site: how to run it, where its data comes from, and how to deploy it. |
 | [data/README.md](data/README.md) | Market data provenance, and why the full capture is a release asset rather than a repository file. |
 
 ## Scope

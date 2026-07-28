@@ -2,9 +2,9 @@
 //
 // Everything per symbol comes out of JSON. These do not, because they describe
 // measurements this site does not ship artifacts for: a microbenchmark harness
-// run, a sweep across arena sizes, a mutation exercise. the frontend plan allows
-// exactly two such tables, the hero and the measurement story, on the condition
-// that each cites the section of BENCHMARKS.md it came from. Each does.
+// run, a sweep across arena sizes, a mutation exercise. Exactly two such tables
+// are allowed, the hero and the measurement story, on the condition that each
+// cites the section of BENCHMARKS.md it came from. Each does.
 //
 // If a number here ever disagrees with that document, that document is right and
 // this file is stale.
