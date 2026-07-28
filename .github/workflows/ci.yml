@@ -296,3 +296,54 @@ jobs:
             echo "unresolved marker found"
             exit 1
           fi
+
+  # The results site reads committed JSON artifacts. This job proves they cannot
+  # drift from the code that produced them: it rebuilds the tools, regenerates the
+  # artifact set from the one raw capture the repository commits, and diffs the
+  # bytes. A change to a tool that alters a published number therefore fails the
+  # build rather than silently changing the site. Same philosophy as the regression
+  # fixtures in test/.
+  #
+  # This covers QQQ on data/qqq_slice.itch. Every other symbol on the site is
+  # derived from a 7.68 GB full day capture that no runner can fetch, which is why
+  # those artifacts carry provenance instead of a guard. The index is still checked,
+  # because it is a pure function of files already committed. See
+  # site/data/SCHEMA.md.
+  artifacts:
+    name: site artifacts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build gcc-13 g++-13
+
+      - name: Configure
+        env:
+          CC: gcc-13
+          CXX: g++-13
+        run: cmake --preset release -DOB_NATIVE_ARCH=OFF
+
+      - name: Build the tools
+        run: cmake --build --preset release --target itch_replay ob_strategy_backtest
+
+      # The generator resolves the binary directory itself and tolerates the .exe
+      # suffix the development host produces, so the same script runs in both
+      # places and there is only one command line to keep correct.
+      - name: Regenerate the guarded artifacts
+        env:
+          OB_BIN: out/build/release
+        run: scripts/generate_ci_artifacts.sh site/data/ci
+
+      - name: Diff against the committed artifacts
+        run: |
+          if ! git diff --exit-code -- site/data/ci; then
+            echo
+            echo "The regenerated artifacts differ from the committed ones."
+            echo "If this change to a tool was intended, rerun"
+            echo "  scripts/generate_ci_artifacts.sh"
+            echo "and commit the result with the change that caused it."
+            exit 1
+          fi

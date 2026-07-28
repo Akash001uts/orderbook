@@ -562,7 +562,9 @@ struct JsonInputs {
 void write_json(const Options& options,
                 const ob::json::Provenance& provenance,
                 const JsonInputs& inputs) {
-  std::ofstream file(options.json_path, std::ios::trunc);
+  // Binary rather than text, so a newline stays one byte on Windows and the file
+  // is identical whichever host wrote it.
+  std::ofstream file(options.json_path, std::ios::trunc | std::ios::binary);
   if (!file) {
     std::cerr << "cannot open " << options.json_path << " for writing\n";
     std::exit(1);

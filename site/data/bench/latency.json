@@ -1,0 +1,157 @@
+{
+  "schema": 1,
+  "tool": "ob_latency_bench",
+  "version": "0.1.0",
+  "provenance": {
+    "source": "data/qqq_slice.itch",
+    "source_bytes": 5533732,
+    "source_sha256": "0ad09797f67716f7a6316c9d188c9406b66ee0ea7f7ea46dbf2627631b629588",
+    "command": "ob_latency_bench --file data/qqq_slice.itch --symbol QQQ --json site/data/bench/latency.json --sha256 0ad09797f67716f7a6316c9d188c9406b66ee0ea7f7ea46dbf2627631b629588"
+  },
+  "environment": {
+    "cpu_brand": "Intel(R) Core(TM) Ultra 5 238V",
+    "hardware_threads": 8,
+    "os": "Windows",
+    "compiler": "GCC 16.1.0",
+    "build_type": "Release",
+    "build_flags": " -O3 -DNDEBUG"
+  },
+  "clock": {
+    "source": "invariant_tsc",
+    "ticks_per_ns": 3.110407,
+    "cpuid_available": true,
+    "tsc_invariant": true,
+    "fallback_reason": "",
+    "overhead_ns": 20.90,
+    "overhead_subtracted": false
+  },
+  "pinning": {
+    "status": "not_requested",
+    "cpu": -1,
+    "detail": "no core requested, thread may migrate"
+  },
+  "frequency_scaling": {
+    "status": "unknown",
+    "detail": "not readable on Windows, assume frequency scaling is active"
+  },
+  "degraded_conditions": 2,
+  "input": {
+    "symbol": "QQQ",
+    "arena_capacity": 131072,
+    "warmup_runs": 1,
+    "measured_runs": 3,
+    "messages_per_run": 183954
+  },
+  "latency_ns": [
+    {
+      "bucket": "add order (A/F)",
+      "count": 278115,
+      "p50": 46,
+      "p90": 96,
+      "p99": 162,
+      "p99_9": 268,
+      "p99_99": 10831,
+      "max": 180223,
+      "mean": 64.0357
+    },
+    {
+      "bucket": "executed (E/C)",
+      "count": 2961,
+      "p50": 44,
+      "p90": 61,
+      "p99": 144,
+      "p99_9": 213,
+      "p99_99": 257,
+      "max": 257,
+      "mean": 48.4343
+    },
+    {
+      "bucket": "cancel (X)",
+      "count": 3186,
+      "p50": 38,
+      "p90": 48,
+      "p99": 115,
+      "p99_9": 225,
+      "p99_99": 12711,
+      "max": 12711,
+      "mean": 45.2131
+    },
+    {
+      "bucket": "delete (D)",
+      "count": 253443,
+      "p50": 39,
+      "p90": 50,
+      "p99": 74,
+      "p99_9": 199,
+      "p99_99": 513,
+      "max": 40127,
+      "mean": 40.8457
+    },
+    {
+      "bucket": "replace (U)",
+      "count": 13461,
+      "p50": 66,
+      "p90": 107,
+      "p99": 180,
+      "p99_9": 328,
+      "p99_99": 4327,
+      "max": 14871,
+      "mean": 77.1717
+    },
+    {
+      "bucket": "trade (P/Q/B)",
+      "count": 180,
+      "p50": 32,
+      "p90": 41,
+      "p99": 46,
+      "p99_9": 49,
+      "p99_99": 49,
+      "max": 49,
+      "mean": 33.7778
+    },
+    {
+      "bucket": "system/directory",
+      "count": 12,
+      "p50": 37,
+      "p90": 203,
+      "p99": 239,
+      "p99_9": 239,
+      "p99_99": 239,
+      "max": 239,
+      "mean": 87.6667
+    },
+    {
+      "bucket": "parsed, discarded",
+      "count": 504,
+      "p50": 31,
+      "p90": 34,
+      "p99": 39,
+      "p99_9": 169,
+      "p99_99": 187,
+      "max": 187,
+      "mean": 31.2262
+    },
+    {
+      "bucket": "ALL",
+      "count": 551862,
+      "p50": 42,
+      "p90": 83,
+      "p99": 156,
+      "p99_9": 242,
+      "p99_99": 6187,
+      "max": 180223,
+      "mean": 53.4744
+    }
+  ],
+  "max_is_a_scheduling_event": true,
+  "throughput": {
+    "mean_messages_per_second": 46991976.97,
+    "run_to_run_cv_percent": 4.6743,
+    "measured_uninstrumented": true,
+    "runs": [
+      48604645.02,
+      47880996.38,
+      44490289.50
+    ]
+  }
+}

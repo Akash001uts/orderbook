@@ -438,8 +438,12 @@ void print_sweep(const std::vector<SweepRow>& rows) {
 // JSON, for the results site.
 // ---------------------------------------------------------------------------
 
+// Binary rather than text. On Windows a text mode stream expands every newline to
+// a carriage return and a line feed, which would make the same artifact two
+// different files depending on which host wrote it and fail the CI guard that
+// compares bytes.
 [[nodiscard]] std::ofstream open_output(const std::string& path) {
-  std::ofstream file(path, std::ios::trunc);
+  std::ofstream file(path, std::ios::trunc | std::ios::binary);
   if (!file) {
     std::cerr << "cannot open " << path << " for writing\n";
     std::exit(1);

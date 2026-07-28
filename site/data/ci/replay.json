@@ -1,0 +1,74 @@
+{
+  "schema": 1,
+  "tool": "itch_replay",
+  "version": "0.1.0",
+  "provenance": {
+    "source": "data/qqq_slice.itch",
+    "source_bytes": 5533732,
+    "source_sha256": "0ad09797f67716f7a6316c9d188c9406b66ee0ea7f7ea46dbf2627631b629588",
+    "command": "itch_replay --symbol QQQ --json site/data/ci/replay.json --json-depth site/data/ci/depth.json --sha256 0ad09797f67716f7a6316c9d188c9406b66ee0ea7f7ea46dbf2627631b629588 data/qqq_slice.itch"
+  },
+  "symbol": "QQQ",
+  "config": {
+    "band_levels": 65536,
+    "arena_capacity": 262144,
+    "max_cold_levels_per_side": 8192,
+    "tick_size": 100,
+    "price_scale": 10000,
+    "message_limit": 0
+  },
+  "parse": {
+    "status": 0,
+    "messages": 183954,
+    "bytes_consumed": 5533732,
+    "unknown_types": 0
+  },
+  "locate": {
+    "resolved": true,
+    "code": 6556
+  },
+  "messages": {
+    "applied": 183950,
+    "other_symbol": 0,
+    "adds": 92705,
+    "executions": 987,
+    "cancels": 1062,
+    "deletes": 84481,
+    "replaces": 4487,
+    "trades": 59,
+    "cross_trades": 1,
+    "broken_trades": 0,
+    "system_events": 3
+  },
+  "rejections": {
+    "off_tick_prices": 5,
+    "rejected_adds": 0,
+    "unknown_order_references": 0
+  },
+  "book": {
+    "final_resting_orders": 7665,
+    "occupied_bid_levels": 2024,
+    "occupied_ask_levels": 334,
+    "rebases": 6,
+    "rebases_abandoned": 0,
+    "cold_levels": 8,
+    "cold_operations": 12
+  },
+  "sizing": {
+    "peak_live_orders": 7730,
+    "arena_capacity": 262144,
+    "library_arena_default": 65536,
+    "peak_occupied_levels": 2370,
+    "band_levels": 65536,
+    "touch_low_tick": 21317,
+    "touch_high_tick": 21411,
+    "touch_span_ticks": 94,
+    "touch_span_band_percent": 0.1434
+  },
+  "final_touch": {
+    "bid_tick": 21318,
+    "bid_price": 2131800,
+    "ask_tick": 21320,
+    "ask_price": 2132000
+  }
+}

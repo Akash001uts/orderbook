@@ -283,8 +283,12 @@ struct ReplayOutcome {
   bool touch_seen = false;
 };
 
+// Binary rather than text, which is not an optimisation. On Windows a text mode
+// stream turns every newline into a carriage return and a line feed, so the same
+// artifact would be two different files depending on which host wrote it, and the
+// CI guard that diffs bytes would fail on every developer's commit.
 [[nodiscard]] std::ofstream open_output(const std::string& path) {
-  std::ofstream file(path, std::ios::trunc);
+  std::ofstream file(path, std::ios::trunc | std::ios::binary);
   if (!file) {
     std::cerr << "cannot open " << path << " for writing\n";
     std::exit(1);
@@ -437,6 +441,11 @@ void write_replay_json(const ReplayOptions& options,
   writer.begin_object();
   writer.field("peak_live_orders", outcome.peak_live_orders);
   writer.field("arena_capacity", book.pool().capacity());
+  // The library's own default, which is the number the sizing story is about. This
+  // tool runs a deliberately larger arena because it is pointed at arbitrary
+  // symbols whose depth is unknown before the run, so its own capacity is the
+  // wrong yardstick for "would the default have held".
+  writer.field("library_arena_default", ReplayBook::Config{}.arena_capacity);
   writer.field("peak_occupied_levels", outcome.peak_occupied_levels);
   writer.field("band_levels", static_cast<std::uint64_t>(REPLAY_BAND));
   if (outcome.touch_seen) {
