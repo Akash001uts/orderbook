@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <string>
@@ -7,6 +8,8 @@
 #include <vector>
 
 #include "itch/mapped_file.hpp"
+#include "json/provenance.hpp"
+#include "json/writer.hpp"
 #include "strategy/backtest.hpp"
 
 // Runs the market making strategy over a replayed ITCH capture and reports P&L
@@ -35,6 +38,8 @@ struct Options {
   bool sweep = false;
   bool latency_sweep = false;
   bool help = false;
+  std::string json_path;
+  std::string sha256;
 };
 
 void print_usage() {
@@ -49,7 +54,12 @@ void print_usage() {
             << "                    Zero is an idealised bound, not a realistic setting\n"
             << "  --sweep           run the parameter sensitivity grid\n"
             << "  --latency-sweep   run the latency sensitivity grid\n"
-            << "  --help\n";
+            << "  --json <path>     also write the results to <path> as JSON\n"
+            << "  --sha256 <hex>    record this hash of the input in the provenance block\n"
+            << "  --help\n\n"
+            << "In JSON mode --sweep and --latency-sweep can be given together, and both\n"
+            << "grids land in one document. The text mode runs one or the other, because a\n"
+            << "reader wants one table at a time and a file wants everything at once.\n";
 }
 
 [[nodiscard]] bool parse_long(const std::string& text, long& out) {
@@ -110,6 +120,18 @@ void print_usage() {
     }
     if (argument == "--symbol") {
       if (!next_value(options.symbol)) {
+        return false;
+      }
+      continue;
+    }
+    if (argument == "--json") {
+      if (!next_value(options.json_path)) {
+        return false;
+      }
+      continue;
+    }
+    if (argument == "--sha256") {
+      if (!next_value(options.sha256)) {
         return false;
       }
       continue;
@@ -261,11 +283,43 @@ void report(const Backtest<>& backtest) {
 // strategy chooses can be tuned, while latency is imposed on it. The values span
 // a co-located participant at a few microseconds through to something well off
 // the critical path at a millisecond.
-void run_latency_sweep(std::span<const std::byte> data, const Options& options) {
+// One row per cell of a sweep, computed once and rendered twice. Before this
+// existed the CSV was printed from inside the loop, which meant a JSON mode would
+// have had to rerun the whole grid to say the same thing in a different shape.
+struct LatencyRow {
+  std::uint64_t latency_us = 0;
+  double total_pnl = 0.0;
+  double spread_pnl = 0.0;
+  double inventory_pnl = 0.0;
+  std::uint64_t fills = 0;
+  std::uint64_t filled_shares = 0;
+  double fill_ratio = 0.0;
+  std::uint64_t quotes_placed = 0;
+  double markout_1s = 0.0;
+  double crossed_percent = 0.0;
+};
+
+struct SweepRow {
+  std::int32_t offset_ticks = 0;
+  double skew_ticks = 0.0;
+  std::uint32_t size = 0;
+  double total_pnl = 0.0;
+  double spread_pnl = 0.0;
+  double inventory_pnl = 0.0;
+  double fee_pnl = 0.0;
+  std::uint64_t fills = 0;
+  double fill_ratio = 0.0;
+  double max_drawdown = 0.0;
+  double markout_1s = 0.0;
+  double crossed_percent = 0.0;
+};
+
+[[nodiscard]] std::vector<LatencyRow> latency_sweep_rows(std::span<const std::byte> data,
+                                                         const Options& options) {
   const std::vector<std::uint64_t> latencies_us{0, 1, 5, 25, 100, 500, 1000};
 
-  std::cout << "\nlatency_us,total_pnl,spread,inventory,fills,filled_shares,fill_ratio,"
-            << "quotes_placed,markout_1s_per_share,crossed_pct\n";
+  std::vector<LatencyRow> rows;
+  rows.reserve(latencies_us.size());
 
   for (const std::uint64_t latency : latencies_us) {
     Options local = options;
@@ -275,11 +329,71 @@ void run_latency_sweep(std::span<const std::byte> data, const Options& options) 
     backtest.run(data);
 
     const auto& pnl = backtest.pnl();
-    std::cout << latency << "," << std::fixed << std::setprecision(2) << pnl.total_pnl() << ","
-              << pnl.spread_pnl() << "," << pnl.inventory_pnl() << "," << pnl.fill_count() << ","
-              << pnl.filled_shares() << "," << std::setprecision(4) << pnl.fill_ratio() << ","
-              << backtest.quotes_placed() << "," << pnl.markout_1s().all.per_share() << ","
-              << (backtest.crossed().crossed_fraction() * 100.0) << std::defaultfloat << "\n";
+    rows.push_back(LatencyRow{.latency_us = latency,
+                              .total_pnl = pnl.total_pnl(),
+                              .spread_pnl = pnl.spread_pnl(),
+                              .inventory_pnl = pnl.inventory_pnl(),
+                              .fills = pnl.fill_count(),
+                              .filled_shares = pnl.filled_shares(),
+                              .fill_ratio = pnl.fill_ratio(),
+                              .quotes_placed = backtest.quotes_placed(),
+                              .markout_1s = pnl.markout_1s().all.per_share(),
+                              .crossed_percent = backtest.crossed().crossed_fraction() * 100.0});
+  }
+
+  return rows;
+}
+
+[[nodiscard]] std::vector<SweepRow> sweep_rows(std::span<const std::byte> data,
+                                               const Options& options) {
+  const std::vector<std::int32_t> offsets{1, 2, 4};
+  const std::vector<double> skews{0.0, 1.0, 2.0};
+  const std::vector<std::uint32_t> sizes{100, 300};
+
+  std::vector<SweepRow> rows;
+  rows.reserve(offsets.size() * skews.size() * sizes.size());
+
+  for (const std::int32_t offset : offsets) {
+    for (const double skew : skews) {
+      for (const std::uint32_t size : sizes) {
+        Options local = options;
+        local.offset_ticks = offset;
+        local.skew_ticks = skew;
+        local.size = size;
+
+        Backtest<> backtest(config_from(local));
+        backtest.run(data);
+
+        const auto& pnl = backtest.pnl();
+        rows.push_back(SweepRow{.offset_ticks = offset,
+                                .skew_ticks = skew,
+                                .size = size,
+                                .total_pnl = pnl.total_pnl(),
+                                .spread_pnl = pnl.spread_pnl(),
+                                .inventory_pnl = pnl.inventory_pnl(),
+                                .fee_pnl = pnl.fee_pnl(),
+                                .fills = pnl.fill_count(),
+                                .fill_ratio = pnl.fill_ratio(),
+                                .max_drawdown = pnl.max_drawdown(),
+                                .markout_1s = pnl.markout_1s().all.per_share(),
+                                .crossed_percent = backtest.crossed().crossed_fraction() * 100.0});
+      }
+    }
+  }
+
+  return rows;
+}
+
+void print_latency_sweep(const std::vector<LatencyRow>& rows) {
+  std::cout << "\nlatency_us,total_pnl,spread,inventory,fills,filled_shares,fill_ratio,"
+            << "quotes_placed,markout_1s_per_share,crossed_pct\n";
+
+  for (const LatencyRow& row : rows) {
+    std::cout << row.latency_us << "," << std::fixed << std::setprecision(2) << row.total_pnl << ","
+              << row.spread_pnl << "," << row.inventory_pnl << "," << row.fills << ","
+              << row.filled_shares << "," << std::setprecision(4) << row.fill_ratio << ","
+              << row.quotes_placed << "," << row.markout_1s << "," << row.crossed_percent
+              << std::defaultfloat << "\n";
   }
 
   std::cout << "\nZero is the idealised bound and is not a realistic setting for any real\n"
@@ -299,35 +413,17 @@ void run_latency_sweep(std::span<const std::byte> data, const Options& options) 
             << "wobbles rather than trends as the window widens.\n";
 }
 
-void run_sweep(std::span<const std::byte> data, const Options& options) {
-  const std::vector<std::int32_t> offsets{1, 2, 4};
-  const std::vector<double> skews{0.0, 1.0, 2.0};
-  const std::vector<std::uint32_t> sizes{100, 300};
-
+void print_sweep(const std::vector<SweepRow>& rows) {
   std::cout << "\noffset_ticks,skew_ticks,size,total_pnl,spread,inventory,fees,fills,"
             << "fill_ratio,max_drawdown,markout_1s_per_share,crossed_pct\n";
 
-  for (const std::int32_t offset : offsets) {
-    for (const double skew : skews) {
-      for (const std::uint32_t size : sizes) {
-        Options local = options;
-        local.offset_ticks = offset;
-        local.skew_ticks = skew;
-        local.size = size;
-
-        Backtest<> backtest(config_from(local));
-        backtest.run(data);
-
-        const auto& pnl = backtest.pnl();
-        std::cout << offset << "," << skew << "," << size << "," << std::fixed
-                  << std::setprecision(2) << pnl.total_pnl() << "," << pnl.spread_pnl() << ","
-                  << pnl.inventory_pnl() << "," << pnl.fee_pnl() << "," << pnl.fill_count() << ","
-                  << std::setprecision(4) << pnl.fill_ratio() << "," << std::setprecision(2)
-                  << pnl.max_drawdown() << "," << std::setprecision(4)
-                  << pnl.markout_1s().all.per_share() << ","
-                  << (backtest.crossed().crossed_fraction() * 100.0) << std::defaultfloat << "\n";
-      }
-    }
+  for (const SweepRow& row : rows) {
+    std::cout << row.offset_ticks << "," << row.skew_ticks << "," << row.size << "," << std::fixed
+              << std::setprecision(2) << row.total_pnl << "," << row.spread_pnl << ","
+              << row.inventory_pnl << "," << row.fee_pnl << "," << row.fills << ","
+              << std::setprecision(4) << row.fill_ratio << "," << std::setprecision(2)
+              << row.max_drawdown << "," << std::setprecision(4) << row.markout_1s << ","
+              << row.crossed_percent << std::defaultfloat << "\n";
   }
 
   std::cout << "\nThis is sensitivity analysis, not a search for an edge. The grid covers one\n"
@@ -336,6 +432,167 @@ void run_sweep(std::span<const std::byte> data, const Options& options) {
             << "the quote widens, whether skew reduces drawdown, and whether the markout\n"
             << "stays negative everywhere, which would say the fills are adversely selected\n"
             << "regardless of parameters.\n";
+}
+
+// ---------------------------------------------------------------------------
+// JSON, for the results site.
+// ---------------------------------------------------------------------------
+
+[[nodiscard]] std::ofstream open_output(const std::string& path) {
+  std::ofstream file(path, std::ios::trunc);
+  if (!file) {
+    std::cerr << "cannot open " << path << " for writing\n";
+    std::exit(1);
+  }
+  return file;
+}
+
+void write_config(ob::json::Writer& writer, const Options& options) {
+  writer.key("config");
+  writer.begin_object();
+  writer.field("symbol", options.symbol);
+  writer.field("quote_offset_ticks", options.offset_ticks);
+  writer.field("quote_size", options.size);
+  writer.field("position_limit", options.position_limit);
+  writer.field("inventory_skew_ticks", options.skew_ticks, ob::json::RATIO_DECIMALS);
+  writer.field("latency_us", options.latency_us);
+  writer.end_object();
+}
+
+void write_markouts(ob::json::Writer& writer, const ob::strategy::PnlAccount& pnl) {
+  writer.key("markouts");
+  writer.begin_array();
+  for (std::size_t index = 0; index < ob::strategy::MARKOUT_COUNT; ++index) {
+    const MarkoutSet& set = pnl.markout(index);
+    writer.begin_object();
+    writer.field("horizon", ob::strategy::MARKOUT_LABELS[index]);
+    writer.field("horizon_ns", ob::strategy::MARKOUT_HORIZONS_NS[index]);
+    writer.field("buy_per_share", set.buy.per_share(), ob::json::RATE_DECIMALS);
+    writer.field("sell_per_share", set.sell.per_share(), ob::json::RATE_DECIMALS);
+    writer.field("all_per_share", set.all.per_share(), ob::json::RATE_DECIMALS);
+    writer.field("fills", set.all.fills);
+    writer.end_object();
+  }
+  writer.end_array();
+  writer.field("unresolved_markouts", pnl.unresolved_markouts());
+}
+
+void write_baseline(ob::json::Writer& writer, const Backtest<>& backtest) {
+  const auto& pnl = backtest.pnl();
+  const auto& crossed = backtest.crossed();
+  const auto& stats = backtest.replay_stats();
+
+  writer.key("replay");
+  writer.begin_object();
+  writer.field("messages_seen", stats.messages_seen);
+  writer.field("messages_applied", stats.messages_applied);
+  writer.end_object();
+
+  writer.key("pnl");
+  writer.begin_object();
+  writer.field("spread", pnl.spread_pnl(), ob::json::MONEY_DECIMALS);
+  writer.field("inventory", pnl.inventory_pnl(), ob::json::MONEY_DECIMALS);
+  writer.field("fees", pnl.fee_pnl(), ob::json::MONEY_DECIMALS);
+  writer.field("total", pnl.total_pnl(), ob::json::MONEY_DECIMALS);
+  writer.field("unit", "ticks times shares");
+  writer.end_object();
+
+  writer.key("risk");
+  writer.begin_object();
+  writer.field("final_position", pnl.position());
+  writer.field("max_long", pnl.max_long());
+  writer.field("max_short", pnl.max_short());
+  writer.field("time_holding_ns", pnl.time_holding_ns());
+  writer.field("max_drawdown", pnl.max_drawdown(), ob::json::MONEY_DECIMALS);
+  writer.end_object();
+
+  writer.key("activity");
+  writer.begin_object();
+  writer.field("fills", pnl.fill_count());
+  writer.field("filled_shares", pnl.filled_shares());
+  writer.field("quoted_shares", pnl.quoted_shares());
+  writer.field("trade_through_fills", pnl.trade_through_fills());
+  writer.field("quotes_placed", backtest.quotes_placed());
+  writer.field("quotes_cancelled", backtest.quotes_cancelled());
+  writer.field("quotes_rejected", backtest.quotes_rejected());
+  writer.field("cancels_too_late", backtest.cancels_too_late());
+  writer.field("limit_overshoot_shares", backtest.limit_overshoot_shares());
+  writer.field("fill_ratio", pnl.fill_ratio(), ob::json::RATIO_DECIMALS);
+  writer.end_object();
+
+  // The caveats travel with the number rather than beside it. A Sharpe ratio
+  // over a strongly autocorrelated series is not wrong so much as not the thing
+  // it looks like, and a site that read the value without the flags would
+  // present it as if it were.
+  writer.key("sharpe");
+  writer.begin_object();
+  writer.field("value", pnl.sharpe(), ob::json::RATIO_DECIMALS);
+  writer.field("samples", pnl.sample_count());
+  writer.field("informative_samples", pnl.informative_sample_count());
+  writer.field("clears_minimum_events", pnl.sharpe_clears_minimum_events());
+  writer.field("annualised", false);
+  writer.end_object();
+
+  write_markouts(writer, pnl);
+
+  writer.key("crossed_book");
+  writer.begin_object();
+  writer.field("intervals", crossed.intervals);
+  writer.field("total_ns", crossed.total_ns);
+  writer.field("observations", crossed.observations);
+  writer.field("crossed_observations", crossed.crossed_observations);
+  writer.field("locked_observations", crossed.locked_observations);
+  writer.field("worst_depth_ticks", crossed.worst_depth_ticks);
+  writer.field("crossed_percent", crossed.crossed_fraction() * 100.0, ob::json::PERCENT_DECIMALS);
+  writer.end_object();
+}
+
+void write_sweeps(ob::json::Writer& writer,
+                  const std::vector<SweepRow>& parameters,
+                  const std::vector<LatencyRow>& latencies) {
+  if (!parameters.empty()) {
+    writer.key("parameter_sweep");
+    writer.begin_array();
+    for (const SweepRow& row : parameters) {
+      writer.begin_object();
+      writer.field("offset_ticks", row.offset_ticks);
+      writer.field("skew_ticks", row.skew_ticks, ob::json::RATIO_DECIMALS);
+      writer.field("size", row.size);
+      writer.field("total_pnl", row.total_pnl, ob::json::MONEY_DECIMALS);
+      writer.field("spread", row.spread_pnl, ob::json::MONEY_DECIMALS);
+      writer.field("inventory", row.inventory_pnl, ob::json::MONEY_DECIMALS);
+      writer.field("fees", row.fee_pnl, ob::json::MONEY_DECIMALS);
+      writer.field("fills", row.fills);
+      writer.field("fill_ratio", row.fill_ratio, ob::json::RATIO_DECIMALS);
+      writer.field("max_drawdown", row.max_drawdown, ob::json::MONEY_DECIMALS);
+      writer.field("markout_1s_per_share", row.markout_1s, ob::json::RATE_DECIMALS);
+      writer.field("crossed_percent", row.crossed_percent, ob::json::PERCENT_DECIMALS);
+      writer.end_object();
+    }
+    writer.end_array();
+  }
+
+  if (latencies.empty()) {
+    return;
+  }
+
+  writer.key("latency_sweep");
+  writer.begin_array();
+  for (const LatencyRow& row : latencies) {
+    writer.begin_object();
+    writer.field("latency_us", row.latency_us);
+    writer.field("total_pnl", row.total_pnl, ob::json::MONEY_DECIMALS);
+    writer.field("spread", row.spread_pnl, ob::json::MONEY_DECIMALS);
+    writer.field("inventory", row.inventory_pnl, ob::json::MONEY_DECIMALS);
+    writer.field("fills", row.fills);
+    writer.field("filled_shares", row.filled_shares);
+    writer.field("fill_ratio", row.fill_ratio, ob::json::RATIO_DECIMALS);
+    writer.field("quotes_placed", row.quotes_placed);
+    writer.field("markout_1s_per_share", row.markout_1s, ob::json::RATE_DECIMALS);
+    writer.field("crossed_percent", row.crossed_percent, ob::json::PERCENT_DECIMALS);
+    writer.end_object();
+  }
+  writer.end_array();
 }
 
 }  // namespace
@@ -362,17 +619,46 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  ob::json::Provenance provenance;
+  provenance.tool = "ob_strategy_backtest";
+  provenance.version = OB_VERSION_STRING;
+  provenance.source_path = options.path;
+  provenance.source_bytes = file.size();
+  provenance.source_sha256 = options.sha256;
+  provenance.command = ob::json::command_line(argc, argv);
+
   std::cout << "Backtest\n";
   std::cout << "  File              " << options.path << "\n";
   std::cout << "  Symbol            " << options.symbol << "\n";
 
-  if (options.latency_sweep) {
-    run_latency_sweep(file.bytes(), options);
-    return 0;
-  }
+  if (options.latency_sweep || options.sweep) {
+    // Both grids can be asked for at once, which the text mode never allowed.
+    // A reader wants one table at a time; a file wants everything the site will
+    // need, so that one invocation produces one artifact.
+    const std::vector<SweepRow> parameters =
+        options.sweep ? sweep_rows(file.bytes(), options) : std::vector<SweepRow>{};
+    const std::vector<LatencyRow> latencies = options.latency_sweep
+                                                  ? latency_sweep_rows(file.bytes(), options)
+                                                  : std::vector<LatencyRow>{};
 
-  if (options.sweep) {
-    run_sweep(file.bytes(), options);
+    if (options.sweep) {
+      print_sweep(parameters);
+    }
+    if (options.latency_sweep) {
+      print_latency_sweep(latencies);
+    }
+
+    if (!options.json_path.empty()) {
+      std::ofstream out = open_output(options.json_path);
+      ob::json::Writer writer(out);
+      writer.begin_object();
+      ob::json::write_header(writer, provenance);
+      write_config(writer, options);
+      write_sweeps(writer, parameters, latencies);
+      writer.end_object();
+      writer.finish();
+      std::cout << "\nwrote " << options.json_path << "\n";
+    }
     return 0;
   }
 
@@ -394,5 +680,18 @@ int main(int argc, char** argv) {
             << "\n";
 
   report(backtest);
+
+  if (!options.json_path.empty()) {
+    std::ofstream out = open_output(options.json_path);
+    ob::json::Writer writer(out);
+    writer.begin_object();
+    ob::json::write_header(writer, provenance);
+    write_config(writer, options);
+    write_baseline(writer, backtest);
+    writer.end_object();
+    writer.finish();
+    std::cout << "\nwrote " << options.json_path << "\n";
+  }
+
   return 0;
 }

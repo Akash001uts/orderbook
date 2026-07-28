@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <span>
@@ -18,6 +19,8 @@
 #include "itch/messages.hpp"
 #include "itch/parser.hpp"
 #include "itch/replay.hpp"
+#include "json/provenance.hpp"
+#include "json/writer.hpp"
 #include "ob/book.hpp"
 
 #include "harness.hpp"
@@ -76,6 +79,8 @@ struct Options {
   std::uint32_t arena_capacity = 1U << 17;
 
   bool help = false;
+  std::string json_path;
+  std::string sha256;
 };
 
 void print_usage() {
@@ -88,7 +93,12 @@ void print_usage() {
             << "                    run to run variance can be reported\n"
             << "  --arena <n>       order arena slots, default 131072. Larger is not\n"
             << "                    safer: an oversized arena measures DRAM, not the book\n"
-            << "  --help\n";
+            << "  --json <path>     also write the results to <path> as JSON\n"
+            << "  --sha256 <hex>    record this hash of the input in the provenance block\n"
+            << "  --help\n\n"
+            << "The JSON carries the environment block as data, not as prose. A latency\n"
+            << "figure without its machine is not a result, and a consumer that reads only\n"
+            << "the percentiles would be publishing one.\n";
 }
 
 // strtol rather than atoi, so that a typo in a command line argument is rejected
@@ -132,6 +142,18 @@ void print_usage() {
     }
     if (argument == "--symbol") {
       if (!next_value(options.symbol)) {
+        return false;
+      }
+      continue;
+    }
+    if (argument == "--json") {
+      if (!next_value(options.json_path)) {
+        return false;
+      }
+      continue;
+    }
+    if (argument == "--sha256") {
+      if (!next_value(options.sha256)) {
         return false;
       }
       continue;
@@ -464,6 +486,174 @@ RunResult replay_once(std::span<const std::byte> data,
   return (std::sqrt(variance) / mean) * 100.0;
 }
 
+// ---------------------------------------------------------------------------
+// JSON, for the results site.
+//
+// The environment block is written as data rather than as the prose
+// print_environment produces. A consumer that read the percentiles without the
+// clock source, the pinning state, and the frequency scaling state would be
+// republishing a figure with its conditions stripped off, which is the exact
+// failure this harness was built to prevent.
+// ---------------------------------------------------------------------------
+
+[[nodiscard]] const char* clock_source_name(ob::bench::ClockSource source) {
+  switch (source) {
+    case ob::bench::ClockSource::invariant_tsc:
+      return "invariant_tsc";
+    case ob::bench::ClockSource::steady_clock:
+      return "steady_clock";
+  }
+  return "unknown";
+}
+
+[[nodiscard]] const char* pin_status_name(ob::bench::PinStatus status) {
+  switch (status) {
+    case ob::bench::PinStatus::pinned:
+      return "pinned";
+    case ob::bench::PinStatus::not_requested:
+      return "not_requested";
+    case ob::bench::PinStatus::unsupported:
+      return "unsupported";
+    case ob::bench::PinStatus::failed:
+      return "failed";
+  }
+  return "unknown";
+}
+
+[[nodiscard]] const char* turbo_status_name(ob::bench::TurboStatus status) {
+  switch (status) {
+    case ob::bench::TurboStatus::active:
+      return "active";
+    case ob::bench::TurboStatus::disabled:
+      return "disabled";
+    case ob::bench::TurboStatus::unknown:
+      return "unknown";
+  }
+  return "unknown";
+}
+
+void write_histogram(ob::json::Writer& writer, const char* label, const hdr_histogram* histogram) {
+  writer.begin_object();
+  writer.field("bucket", label);
+  writer.field("count", histogram->total_count);
+  writer.field("p50", hdr_value_at_percentile(histogram, 50.0));
+  writer.field("p90", hdr_value_at_percentile(histogram, 90.0));
+  writer.field("p99", hdr_value_at_percentile(histogram, 99.0));
+  writer.field("p99_9", hdr_value_at_percentile(histogram, 99.9));
+  writer.field("p99_99", hdr_value_at_percentile(histogram, 99.99));
+  writer.field("max", hdr_max(histogram));
+  writer.field("mean", hdr_mean(histogram), ob::json::RATIO_DECIMALS);
+  writer.end_object();
+}
+
+struct JsonInputs {
+  const ob::bench::Environment* environment = nullptr;
+  const ob::bench::TimerInfo* timer = nullptr;
+  const ob::bench::PinInfo* pin = nullptr;
+  const ob::bench::TurboInfo* turbo = nullptr;
+  const Histograms* histograms = nullptr;
+  const std::vector<double>* throughputs = nullptr;
+  double timer_overhead_ns = 0.0;
+  double mean_throughput = 0.0;
+  std::uint64_t messages = 0;
+  int warnings = 0;
+};
+
+void write_json(const Options& options,
+                const ob::json::Provenance& provenance,
+                const JsonInputs& inputs) {
+  std::ofstream file(options.json_path, std::ios::trunc);
+  if (!file) {
+    std::cerr << "cannot open " << options.json_path << " for writing\n";
+    std::exit(1);
+  }
+
+  ob::json::Writer writer(file);
+  writer.begin_object();
+  ob::json::write_header(writer, provenance);
+
+  writer.key("environment");
+  writer.begin_object();
+  writer.field("cpu_brand", inputs.environment->cpu_brand);
+  writer.field("hardware_threads", inputs.environment->hardware_threads);
+  writer.field("os", inputs.environment->os);
+  writer.field("compiler", inputs.environment->compiler);
+  writer.field("build_type", inputs.environment->build_type);
+  writer.field("build_flags", inputs.environment->build_flags);
+  writer.end_object();
+
+  writer.key("clock");
+  writer.begin_object();
+  writer.field("source", clock_source_name(inputs.timer->source));
+  writer.field("ticks_per_ns", inputs.timer->ticks_per_ns, ob::json::RATE_DECIMALS);
+  writer.field("cpuid_available", inputs.timer->cpuid_available);
+  writer.field("tsc_invariant", inputs.timer->tsc_invariant);
+  writer.field("fallback_reason", inputs.timer->fallback_reason);
+  writer.field("overhead_ns", inputs.timer_overhead_ns, ob::json::MONEY_DECIMALS);
+  writer.field("overhead_subtracted", false);
+  writer.end_object();
+
+  writer.key("pinning");
+  writer.begin_object();
+  writer.field("status", pin_status_name(inputs.pin->status));
+  writer.field("cpu", inputs.pin->cpu);
+  writer.field("detail", inputs.pin->detail);
+  writer.end_object();
+
+  writer.key("frequency_scaling");
+  writer.begin_object();
+  writer.field("status", turbo_status_name(inputs.turbo->status));
+  writer.field("detail", inputs.turbo->detail);
+  writer.end_object();
+
+  writer.field("degraded_conditions", inputs.warnings);
+
+  writer.key("input");
+  writer.begin_object();
+  writer.field("symbol", options.symbol);
+  writer.field("arena_capacity", options.arena_capacity);
+  writer.field("warmup_runs", options.warmup_runs);
+  writer.field("measured_runs", options.measured_runs);
+  writer.field("messages_per_run", inputs.messages);
+  writer.end_object();
+
+  writer.key("latency_ns");
+  writer.begin_array();
+  for (std::size_t index = 0; index < BUCKET_COUNT; ++index) {
+    const auto bucket = static_cast<Bucket>(index);
+    const hdr_histogram* histogram = inputs.histograms->bucket(bucket);
+    if (histogram->total_count == 0) {
+      continue;
+    }
+    write_histogram(writer, bucket_name(bucket), histogram);
+  }
+  write_histogram(writer, "ALL", inputs.histograms->total());
+  writer.end_array();
+
+  // The max column is a scheduling event rather than a property of the book on a
+  // core the operating system can interrupt, and the site has no way to know that
+  // unless the artifact says so.
+  writer.field("max_is_a_scheduling_event", true);
+
+  writer.key("throughput");
+  writer.begin_object();
+  writer.field("mean_messages_per_second", inputs.mean_throughput, ob::json::MONEY_DECIMALS);
+  writer.field("run_to_run_cv_percent",
+               coefficient_of_variation(*inputs.throughputs),
+               ob::json::PERCENT_DECIMALS);
+  writer.field("measured_uninstrumented", true);
+  writer.key("runs");
+  writer.begin_array();
+  for (const double value : *inputs.throughputs) {
+    writer.value(value, ob::json::MONEY_DECIMALS);
+  }
+  writer.end_array();
+  writer.end_object();
+
+  writer.end_object();
+  writer.finish();
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -590,6 +780,31 @@ int main(int argc, char** argv) {
   if (warnings > 0) {
     std::cout << "\nThis run had " << warnings
               << " degraded condition(s). See the environment block above.\n";
+  }
+
+  if (!options.json_path.empty()) {
+    ob::json::Provenance provenance;
+    provenance.tool = "ob_latency_bench";
+    provenance.version = OB_VERSION_STRING;
+    provenance.source_path = options.path;
+    provenance.source_bytes = file.size();
+    provenance.source_sha256 = options.sha256;
+    provenance.command = ob::json::command_line(argc, argv);
+
+    JsonInputs inputs;
+    inputs.environment = &environment;
+    inputs.timer = &timer;
+    inputs.pin = &pin;
+    inputs.turbo = &turbo;
+    inputs.histograms = &histograms;
+    inputs.throughputs = &throughputs;
+    inputs.timer_overhead_ns = timer_overhead;
+    inputs.mean_throughput = mean_throughput;
+    inputs.messages = messages;
+    inputs.warnings = warnings;
+
+    write_json(options, provenance, inputs);
+    std::cout << "\nwrote " << options.json_path << "\n";
   }
 
   return 0;
