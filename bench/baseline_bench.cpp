@@ -100,7 +100,12 @@ FlatEngine::Config flat_config() {
 struct VectorSink {
   std::vector<ExecutionEvent>* out = nullptr;
 
-  void push(const ExecutionEvent& event) const { out->push_back(event); }
+  // Returns true: it grows rather than rejecting, so the engine's overflow policy
+  // never fires here. The engine reads the result, so push must be bool.
+  bool push(const ExecutionEvent& event) const {
+    out->push_back(event);
+    return true;
+  }
 };
 
 Command make_add(std::uint64_t id, std::int32_t tick, Side side, std::uint64_t quantity) {

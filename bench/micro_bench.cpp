@@ -498,7 +498,12 @@ constexpr std::uint64_t CROSS_QTY = 100;
 struct CountingSink {
   std::uint64_t events = 0;
 
-  void push(const ExecutionEvent& /*event*/) noexcept { ++events; }
+  // Returns true: it counts every event and never rejects. The engine reads the
+  // push result to enforce its overflow policy, so push must be bool.
+  bool push(const ExecutionEvent& /*event*/) noexcept {
+    ++events;
+    return true;
+  }
 };
 
 BenchEngine::Config bench_engine_config() {

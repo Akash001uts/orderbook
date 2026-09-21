@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -195,8 +197,13 @@ class Book {
     Ticks initial_center{0};
   };
 
+  // Rejects an unusable configuration before any storage is allocated. The
+  // comma operator on the first member runs validate_config first, so a bad
+  // arena capacity or price configuration throws std::invalid_argument rather
+  // than tripping a debug-only assert deep inside OrderPool or corrupting the
+  // conversions. The throw happens in both debug and release builds.
   explicit Book(const Config& config)
-      : pool_(config.arena_capacity),
+      : pool_((validate_config(config), config.arena_capacity)),
         id_map_(config.arena_capacity),
         cold_(config.max_cold_levels_per_side),
         price_config_(config.price),
@@ -555,6 +562,26 @@ class Book {
   }
 
  private:
+  // Construction-time validation. Runs before pool_ allocates, so a rejected
+  // configuration never touches the allocator. Throws std::invalid_argument with a
+  // specific reason; returns void so it composes with the comma operator in the
+  // member initializer list.
+  static void validate_config(const Config& config) {
+    if (config.arena_capacity == 0U) {
+      throw std::invalid_argument("Book: arena_capacity must be greater than zero");
+    }
+    // INVALID_INDEX is the free-list and "no order" sentinel, so a valid arena
+    // index must always be strictly below it. A capacity of INVALID_INDEX or more
+    // would make the last slot indistinguishable from "no order".
+    if (config.arena_capacity >= INVALID_INDEX) {
+      throw std::invalid_argument(
+          "Book: arena_capacity must be below the reserved INVALID_INDEX sentinel");
+    }
+    if (const char* error = config.price.validity_error(); error != nullptr) {
+      throw std::invalid_argument(std::string("Book: ") + error);
+    }
+  }
+
   [[nodiscard]] static Ticks centre_to_base(Ticks centre) noexcept {
     return Ticks{centre.raw() - static_cast<std::int32_t>(BandLevels / 2)};
   }

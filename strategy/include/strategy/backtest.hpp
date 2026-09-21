@@ -126,9 +126,11 @@ class Backtest {
  private:
   // A sink that discards. The strategy learns about its own fills from the queue
   // estimator rather than from engine events, because a fill here is inferred
-  // from what the venue did, not produced by matching.
+  // from what the venue did, not produced by matching. It returns true because it
+  // never rejects: the engine reads the push result to enforce its overflow policy,
+  // and a discarding sink has no capacity to exceed.
   struct NullSink {
-    void push(const ExecutionEvent& /*event*/) const noexcept {}
+    [[nodiscard]] bool push(const ExecutionEvent& /*event*/) const noexcept { return true; }
   };
 
   static typename EngineType::Config make_config(const BacktestConfig& config) {

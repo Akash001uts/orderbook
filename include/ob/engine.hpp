@@ -3,6 +3,8 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <optional>
 
 #include "ob/book.hpp"
@@ -11,6 +13,22 @@
 #include "ob/types.hpp"
 
 namespace ob {
+
+// The event sink is full and the engine has an event it cannot deliver. There is
+// no recoverable choice here: dropping the event would desynchronise any consumer
+// reconstructing state from the stream, and the engine cannot resize a sink it does
+// not own. submit is noexcept, so this cannot throw either. It aborts, in debug and
+// release alike, rather than silently losing an event. The caller's contract is to
+// size the sink for the most events one command can produce; see Engine::submit.
+[[noreturn]] inline void fatal_event_sink_overflow() noexcept {
+  std::fputs(
+      "ob::Engine: the event sink rejected a push because it is full. A sink must "
+      "hold every event a single command can emit, which for a marketable order is "
+      "one fill per resting order it consumes plus a terminal event. Aborting rather "
+      "than dropping an event.\n",
+      stderr);
+  std::abort();
+}
 
 // What to do when an incoming order would trade against a resting order entered by
 // the same participant.
@@ -89,7 +107,15 @@ class Engine {
   //
   // Sink is a template parameter so the append inlines. A std::function or a
   // virtual sink would put an indirect call on every fill, which the compiler
-  // could neither inline nor optimise across.
+  // could neither inline nor optimise across. A Sink must expose
+  // `bool push(const ExecutionEvent&)`, returning false only when it is full.
+  //
+  // Capacity is the caller's responsibility. One command can emit more than one
+  // event: a marketable order emits a fill per resting order it consumes, plus a
+  // terminal cancel or book update, so the sink must hold at least that many. This
+  // call is noexcept and does not roll back; a sink that rejects a push is a fatal
+  // sizing error and aborts the process rather than dropping the event. Drain the
+  // sink between commands so it starts each command empty.
   template <typename Sink>
   void submit(const Command& command, Sink& sink) noexcept {
     switch (command.type) {
@@ -116,7 +142,13 @@ class Engine {
     ExecutionEvent stamped = event;
     stamped.sequence = next_sequence_;
     next_sequence_ += Sequence{1};
-    static_cast<void>(sink.push(stamped));
+    // A sink reports a rejected push by returning false. That is unrecoverable
+    // here, so the policy is to terminate rather than drop the event or unwind a
+    // half-applied command. A sink that cannot reject (a discarding one) returns
+    // true unconditionally, so this branch folds away for it.
+    if (!sink.push(stamped)) [[unlikely]] {
+      fatal_event_sink_overflow();
+    }
   }
 
   template <typename Sink>

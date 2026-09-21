@@ -126,14 +126,44 @@ struct PriceConfig {
   std::int64_t price_scale = 10000;  // scaled units per currency unit
   std::int64_t base_price = 0;       // scaled price mapped to tick index zero
 
+  // Whether this configuration can be used at all. The conversions below have real
+  // preconditions rather than merely conventional ones: tick_size is a divisor in
+  // to_ticks and a modulus in on_tick_boundary, so a zero or negative tick_size is
+  // undefined behaviour, not a wrong answer; price_scale divides scaled units into
+  // currency and must be positive; and base_price must land on a tick boundary or
+  // tick index zero would not map back to an exact price.
+  //
+  // Returns nullptr when the configuration is valid, or a static human readable
+  // reason when it is not, so a caller can raise std::invalid_argument with a
+  // specific message. Constructing a Book or Engine enforces this; the raw
+  // conversion methods trust it, because they run on the API boundary of the hot
+  // path and cannot afford to recheck.
+  [[nodiscard]] constexpr const char* validity_error() const noexcept {
+    if (tick_size <= 0) {
+      return "PriceConfig.tick_size must be positive";
+    }
+    if (price_scale <= 0) {
+      return "PriceConfig.price_scale must be positive";
+    }
+    if (base_price % tick_size != 0) {
+      return "PriceConfig.base_price must be an exact multiple of tick_size";
+    }
+    return nullptr;
+  }
+
+  [[nodiscard]] constexpr bool valid() const noexcept { return validity_error() == nullptr; }
+
+  // Precondition: valid() and on_tick_boundary(price). Undefined otherwise.
   [[nodiscard]] constexpr Ticks to_ticks(Price price) const noexcept {
     return Ticks{static_cast<std::int32_t>((price.raw() - base_price) / tick_size)};
   }
 
+  // Precondition: valid(). Undefined otherwise.
   [[nodiscard]] constexpr Price to_price(Ticks ticks) const noexcept {
     return Price{base_price + (static_cast<std::int64_t>(ticks.raw()) * tick_size)};
   }
 
+  // Precondition: valid(). Undefined otherwise.
   [[nodiscard]] constexpr bool on_tick_boundary(Price price) const noexcept {
     return (price.raw() - base_price) % tick_size == 0;
   }

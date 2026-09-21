@@ -17,6 +17,7 @@ endif()
 option(OB_BUILD_TESTS "Build the unit, differential, and fuzz test targets" ON)
 option(OB_BUILD_BENCH "Build the microbenchmark and latency harness targets" ON)
 option(OB_BUILD_TOOLS "Build the synthetic ITCH generator" ON)
+option(OB_BUILD_EXAMPLES "Build the runnable API example" ON)
 option(OB_BUILD_FUZZERS "Build the libFuzzer differential target, requires Clang" OFF)
 option(OB_NATIVE_ARCH "Compile with -march=native" ON)
 option(OB_WERROR "Treat warnings as errors" ON)
@@ -299,6 +300,7 @@ if(OB_BUILD_TESTS)
     test/test_types.cpp
     test/test_book.cpp
     test/test_engine.cpp
+    test/test_engine_boundaries.cpp
     test/test_differential.cpp
     test/test_itch.cpp
     test/test_strategy.cpp)
@@ -435,4 +437,15 @@ if(OB_BUILD_TOOLS)
     tools/strategy_backtest.cpp)
 
   target_link_libraries(ob_strategy_backtest PRIVATE ob_strategy ob_flags ob_json)
+endif()
+
+# ---------------------------------------------------------------------------
+# Examples. Compiled with the same warnings-as-errors flags as the library so a
+# documented usage that stops compiling fails the build rather than rotting.
+# ---------------------------------------------------------------------------
+if(OB_BUILD_EXAMPLES)
+  add_executable(ob_example
+    examples/engine_usage.cpp)
+
+  target_link_libraries(ob_example PRIVATE ob ob_flags)
 endif()
