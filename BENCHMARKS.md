@@ -356,12 +356,22 @@ live orders, which is close to the 8 842 peak a full day of QQQ actually reaches
 Both arms take the identical workload, in one process, so the ratios are paired
 even though the absolute figures drift between sessions.
 
+This table and the allocation table below are generated from
+`site/data/bench/baseline.json` by `scripts/sync_benchmarks.py`, which is the same
+artifact the results site reads. To update them after an accepted benchmark run,
+edit the numbers in that JSON file, run `python3 scripts/sync_benchmarks.py`, then
+review the artifact change and the regenerated tables together in one diff. CI runs
+`scripts/sync_benchmarks.py --check` and fails if the two ever disagree, so the rows
+here cannot be edited by hand.
+
+<!-- BEGIN GENERATED baseline (scripts/sync_benchmarks.py) -->
 | Operation | Flat book | `std::map` book | Ratio |
 | --- | --- | --- | --- |
-| Add, resting | 30.5 ns | 84.7 ns | **2.8x faster** |
+| Add | 30.5 ns | 84.7 ns | **2.8x faster** |
 | Cancel | 11.5 ns | 61.1 ns | **5.3x faster** |
 | Match, one level consumed | 32.2 ns | 67.4 ns | **2.1x faster** |
-| Best bid query | **0.26 ns** | 4.45 ns | see below |
+| Best bid query | **0.26 ns** | 4.45 ns | below measurement resolution |
+<!-- END GENERATED baseline -->
 
 **The best price query was the one operation the flat book lost, and it has since
 been fixed.** The history is worth keeping because the fix is only meaningful
@@ -393,10 +403,12 @@ The largest single difference is allocation, and it is counted exactly rather th
 inferred, through the `operator new` replacement in `test/alloc_counter.hpp`,
 measured outside every timed region:
 
+<!-- BEGIN GENERATED allocations (scripts/sync_benchmarks.py) -->
 | | Allocations per add |
 | --- | --- |
 | Flat book | **0** |
 | `std::map` book | **2.064** |
+<!-- END GENERATED allocations -->
 
 That figure decomposes completely, which is why it is worth more here than a
 cache-miss sample would be. Each add allocates one `std::list` node for the

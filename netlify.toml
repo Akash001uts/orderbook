@@ -1,10 +1,9 @@
 # Netlify build configuration for the results site.
 #
-# Both Netlify and Vercel build from a private repository on their free tiers,
-# which is why the site can be deployed before the question in data/README.md about
-# NASDAQ's terms is settled. Nothing server side runs: this is a static build of
-# site/, and the artifacts it reads are committed JSON. No environment variables,
-# no secrets, nothing to leak.
+# Both Netlify and Vercel build this static site directly from the repository on
+# their free tiers, which work for both private and public repositories. Nothing
+# server side runs: this is a static build of site/, and the artifacts it reads are
+# committed JSON. No environment variables, no secrets, nothing to leak.
 #
 # The equivalent Vercel configuration is site/vercel.json.
 

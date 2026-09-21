@@ -14,7 +14,8 @@ library.
 
 ## Common header
 
-Present in every artifact except `source.json`, which no tool writes.
+Present in every artifact except `source.json` and `bench/baseline.json`, which no
+tool writes.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
@@ -173,6 +174,28 @@ latency and should not be drawn as if it were.
 | `throughput.mean_messages_per_second` | From separate uninstrumented runs. |
 | `throughput.measured_uninstrumented` | Always true. Latency and throughput cannot be measured in the same pass: two timestamp reads and two fences cost about as much as a message does. |
 | `throughput.run_to_run_cv_percent`, `runs[]` | Variance, reported rather than averaged away. |
+
+## `baseline.json`, the comparative baseline
+
+Hand written rather than tool emitted, so it does not carry the common header's
+`provenance` block. It is the single source for the `std::map` comparison the hero
+panel shows and for the baseline and allocation tables in BENCHMARKS.md, which
+`scripts/sync_benchmarks.py` renders from it. Updating it after an accepted
+benchmark run, then running that script, is the whole update path; the site derives
+every display string and ratio from the numeric fields here.
+
+| Field | Meaning |
+| --- | --- |
+| `schema` | This document's version. Currently 1. |
+| `tool` | `ob_baseline_bench`, the program the figures came from. |
+| `version` | Project version, matching the other artifacts. |
+| `benchmark_command` | The exact command line that produces these numbers. |
+| `repetitions` | Benchmark repetitions behind each figure. |
+| `statistic` | The statistic reported, `median`. |
+| `rows[]` | One per operation: `id` a stable identifier, `label` a display string, `flat_ns` and `naive_ns` the two timings in nanoseconds, and `interpretation`. |
+| `rows[].interpretation` | `faster` when the flat book wins and the ratio is worth stating, or `below_resolution` when the figure is below what the harness can resolve and a ratio would mislead. The site chooses its wording from this rather than from the numbers. |
+| `query_noise_floor_ns` | The empty loop floor the best price query is measured against. |
+| `allocations_per_add.flat`, `.naive` | Allocations per add, counted exactly by the `operator new` replacement. Zero for the flat book. |
 
 ## `source.json`, per symbol directory
 

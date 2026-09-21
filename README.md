@@ -15,11 +15,13 @@ rather than a smoke test.
 
 All six phases complete. The book, the matching engine, the ITCH 5.0 pipeline, the
 benchmark harness, the market making strategy layer, the results site, and the
-documentation are built and tested: 127 tests green on GCC and Clang across debug,
-release, relwithdebinfo, and all three sanitizers, with 15 CI jobs covering both
-compilers, every preset, all three sanitizers, clang-tidy, clang-format, the
-differential test, a libFuzzer run, and a byte for byte diff of the site's
-artifacts. The repository is private.
+documentation are built and tested: 127 tests on GCC and Clang across debug,
+release, relwithdebinfo, and all three sanitizers, 126 passing and one differential
+regression replay skipped until a shrunk fixture is committed. CI is 16 jobs
+covering both compilers, every preset, all three sanitizers, clang-tidy,
+clang-format, the differential test, a libFuzzer run, a byte for byte diff of the
+site's artifacts, and a production build of the results site. The repository is MIT
+licensed and prepared for public release; see the License section.
 
 | Phase | Scope | State |
 | --- | --- | --- |
@@ -206,6 +208,13 @@ the committed JSON artifacts the tools above emit, so it runs on a fresh clone:
 cd site && npm install && npm run dev
 ```
 
+The headline `std::map` comparison shown on the site is read from a single
+canonical artifact, `site/data/bench/baseline.json`, which is also the source the
+baseline and allocation tables in [BENCHMARKS.md](BENCHMARKS.md) are rendered from
+by `scripts/sync_benchmarks.py`. A CI job runs that script in `--check` mode, so the
+site, the document, and the artifact cannot disagree on those two comparison tables.
+Other numbers in the prose, such as the arena curve, are not covered by this guard.
+
 ## Architecture
 
 ```
@@ -265,3 +274,14 @@ Deliberately not built: network transport, FIX or SBE gateways, multi-symbol
 thread sharding, persistence or a write-ahead log, clustering, a web UI, and any
 live trading connection. The reasoning for each exclusion is recorded in
 [DESIGN.md](DESIGN.md).
+
+## License
+
+The original source code and documentation are released under the MIT license,
+see [LICENSE](LICENSE).
+
+That grant does not extend to the Nasdaq-sourced market data: the committed slice
+at `data/qqq_slice.itch` and the derived market-data artifacts under `site/data/`
+are excluded from the MIT license and remain subject to Nasdaq's applicable terms.
+The exclusion is stated in [NOTICE](NOTICE), and the provenance and required
+attribution are in [data/README.md](data/README.md).

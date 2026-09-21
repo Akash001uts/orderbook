@@ -1,25 +1,48 @@
-import type { LatencyArtifact } from '../data'
-import { BASELINE, BASELINE_CITATION, HERO_FOOTNOTES, PROJECT, ARCHITECTURE } from '../content'
+import type { BaselineArtifact, BaselineRow, LatencyArtifact } from '../data'
+import { formatNs, formatRatio } from '../baseline'
+import { BASELINE_CITATION, HERO_FOOTNOTES, PROJECT, ARCHITECTURE } from '../content'
 import { decimal, element, integer, nanoseconds, scrollBox } from '../format'
 
 // The hero. Headline numbers, and the caveats next to them rather than below the
 // fold, because on this project the honesty is the differentiator.
+//
+// Every figure in the std::map comparison is derived from the numeric fields of
+// baseline.json rather than stated, so the site cannot drift from the artifact the
+// document also renders from. The formatting helpers live in ../baseline alongside
+// the validator, so the site and scripts/sync_benchmarks.py print the same values.
 
 function citation(document: string, section: string): HTMLElement {
   return element('p', { class: 'citation' }, `${document}, "${section}"`)
 }
 
-function baselineTable(): HTMLElement {
+// The ns figures and the ratio are formatted from the numbers; the wording for a
+// result below the harness floor comes from the row's interpretation, never from a
+// ratio of two figures that small.
+function baselineCells(row: BaselineRow): { flat: string; naive: string; ratio: string } {
+  const flat = `${formatNs(row.flat_ns)} ns`
+  const naive = `${formatNs(row.naive_ns)} ns`
+  if (row.interpretation === 'below_resolution') {
+    return { flat, naive, ratio: 'below measurement resolution' }
+  }
+  return { flat, naive, ratio: formatRatio(row) }
+}
+
+function baselineTable(baseline: BaselineArtifact): HTMLElement {
   const body = element('tbody')
-  for (const row of BASELINE) {
+  for (const row of baseline.rows) {
+    const cells = baselineCells(row)
     body.append(
       element(
         'tr',
         {},
-        element('th', { scope: 'row' }, row.operation),
-        element('td', { class: 'num' }, row.flat),
-        element('td', { class: 'num' }, row.naive),
-        element('td', { class: `num ${row.faster ? 'good' : 'bad'}` }, row.ratio),
+        element('th', { scope: 'row' }, row.label),
+        element('td', { class: 'num' }, cells.flat),
+        element('td', { class: 'num' }, cells.naive),
+        element(
+          'td',
+          { class: `num ${row.interpretation === 'below_resolution' ? '' : 'good'}` },
+          cells.ratio,
+        ),
       ),
     )
   }
@@ -70,8 +93,19 @@ function liveFigures(latency: LatencyArtifact): HTMLElement {
   )
 }
 
-export function heroPanel(latency: LatencyArtifact): HTMLElement {
+// Derived from the artifact so the figure cannot drift from the published one.
+function allocationFootnote(baseline: BaselineArtifact): string {
+  const flat = decimal(baseline.allocations_per_add.flat, 0)
+  const naive = decimal(baseline.allocations_per_add.naive, 3)
+  return (
+    `Allocations per add are ${flat} against ${naive}, counted exactly rather than sampled. ` +
+    'The std::map book allocates a list node and a hash node on every add, plus one map node per newly occupied level; the flat book allocates nothing after construction.'
+  )
+}
+
+export function heroPanel(latency: LatencyArtifact, baseline: BaselineArtifact): HTMLElement {
   const all = latency.latency_ns.find((row) => row.bucket === 'ALL')
+  const footnotes = [allocationFootnote(baseline), ...HERO_FOOTNOTES]
 
   return element(
     'header',
@@ -81,9 +115,10 @@ export function heroPanel(latency: LatencyArtifact): HTMLElement {
     element(
       'p',
       { class: 'lede' },
-      'Every number on this page is read from a JSON artifact committed next to the code that produced it. ' +
+      'Almost every number on this page is read from a JSON artifact committed next to the code that produced it. ' +
         'The set for QQQ is regenerated and diffed byte for byte on every push, so the site cannot drift from the engine. ' +
-        'The parts that cannot be reproduced by a runner say so, and carry the hash of the capture they came from.',
+        'The few figures that are stated rather than read, like the arena sweep further down, cite the document they come from, ' +
+        'and the parts that cannot be reproduced by a runner say so and carry the hash of the capture they came from.',
     ),
 
     liveFigures(latency),
@@ -95,7 +130,7 @@ export function heroPanel(latency: LatencyArtifact): HTMLElement {
         'div',
         {},
         element('h3', {}, 'Against a std::map book, same command stream, one process'),
-        scrollBox(baselineTable()),
+        scrollBox(baselineTable(baseline)),
         citation(BASELINE_CITATION.document, BASELINE_CITATION.section),
       ),
       element(
@@ -183,7 +218,7 @@ export function heroPanel(latency: LatencyArtifact): HTMLElement {
       element(
         'ul',
         {},
-        ...HERO_FOOTNOTES.map((footnote) => element('li', {}, footnote)),
+        ...footnotes.map((footnote) => element('li', {}, footnote)),
       ),
     ),
 

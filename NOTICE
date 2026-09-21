@@ -1,0 +1,18 @@
+Third-party data notice
+
+The MIT license in LICENSE covers this project's original source code and
+documentation only. It does not cover, and does not relicense, the Nasdaq-sourced
+market data in this repository:
+
+  - data/qqq_slice.itch, a slice of a NASDAQ TotalView-ITCH 5.0 capture
+  - the derived market-data artifacts under site/data/
+
+That data originates from NASDAQ's public sample archive at emi.nasdaq.com (source
+file 12302019.NASDAQ_ITCH50.gz, trading date 2019-12-30, symbol QQQ). It remains
+subject to Nasdaq's applicable terms. Any use beyond this repository should
+attribute NASDAQ as the source of the underlying data and observe those terms.
+
+Redistribution of this data in the repository is made on the assumption that
+Nasdaq's redistribution permission is granted; obtaining and retaining that
+permission record is handled separately from this repository and is not certified
+by the MIT grant above. See data/README.md for the full provenance.

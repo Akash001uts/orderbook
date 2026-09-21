@@ -8,6 +8,8 @@
 // symbol never downloads it, and clicking back to a symbol already seen costs
 // nothing.
 
+import { validateBaseline, type BaselineArtifact } from './baseline'
+
 export interface Provenance {
   source: string
   source_bytes: number
@@ -293,6 +295,11 @@ export interface LatencyArtifact extends ArtifactHeader {
   }
 }
 
+// The canonical std::map comparison contract and its validator live in ./baseline,
+// which is free of DOM and fetch references so it can also be imported by a plain
+// Node test. Re-exported here so existing importers keep their './data' path.
+export type { BaselineArtifact, BaselineRow, BaselineInterpretation } from './baseline'
+
 /** Everything one symbol's panels need. */
 export interface SymbolBundle {
   replay: ReplayArtifact
@@ -329,6 +336,12 @@ export function loadIndex(): Promise<IndexArtifact> {
 
 export function loadLatency(): Promise<LatencyArtifact> {
   return fetchJson<LatencyArtifact>('bench/latency.json')
+}
+
+export function loadBaseline(): Promise<BaselineArtifact> {
+  // Fetched as unknown so validateBaseline sees genuinely untrusted input; a file
+  // that parses but is malformed is rejected here and surfaces the error state.
+  return fetchJson<unknown>('bench/baseline.json').then(validateBaseline)
 }
 
 export async function loadSymbol(symbol: string): Promise<SymbolBundle> {

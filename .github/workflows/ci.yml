@@ -353,3 +353,69 @@ jobs:
       # rebuilt and compared. That closes the gap the provenance rule leaves.
       - name: Check the index against the artifacts it is derived from
         run: python3 scripts/build_index.py --check
+
+  # The results site itself: the benchmark document stays in step with the canonical
+  # baseline artifact, the site type checks, and a production build succeeds with the
+  # artifacts the page reads copied into the output. This is the guard that a site or
+  # artifact change cannot ship a page that fails to build or drops a required file.
+  site:
+    name: site build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      # The validator guards against a baseline that parses but misleads: a row
+      # marked faster whose flat book is not actually faster, a negative allocation
+      # count, a missing noise floor. python3 is present on the runner image already.
+      - name: Check the baseline validator
+        run: python3 scripts/test_sync_benchmarks.py
+
+      # BENCHMARKS.md renders its baseline and allocation tables from
+      # site/data/bench/baseline.json through scripts/sync_benchmarks.py. This fails
+      # the build if the document was edited by hand or the artifact changed without
+      # rerunning the script.
+      - name: Check the benchmark document against the baseline artifact
+        run: python3 scripts/sync_benchmarks.py --check
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      - name: Install dependencies
+        working-directory: site
+        run: npm ci
+
+      # The baseline validator has a mirror of the Python regression cases. Node 22
+      # strips the TypeScript types at run time, so no test runner is installed.
+      - name: Run the site validator tests
+        working-directory: site
+        run: npm test
+
+      - name: Build the site
+        working-directory: site
+        run: npm run build
+
+      # Vite copies site/data verbatim into dist. If a required artifact ever stops
+      # being copied, the deployed page would 404 on it silently, so the presence of
+      # the files the page actually fetches is asserted here rather than assumed.
+      - name: Verify the required files are in the build output
+        working-directory: site
+        run: |
+          required=(
+            dist/index.html
+            dist/index.json
+            dist/bench/baseline.json
+            dist/bench/latency.json
+            dist/symbols/QQQ/replay.json
+          )
+          missing=0
+          for file in "${required[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "missing from the build output: $file"
+              missing=1
+            fi
+          done
+          exit "$missing"

@@ -24,3 +24,8 @@ data/*
 # dependency tree are not.
 site/node_modules/
 site/dist/
+
+# Cache and benchmark scratch. None of these belong in history.
+__pycache__/
+*.pyc
+bench_results/

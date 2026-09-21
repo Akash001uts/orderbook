@@ -33,9 +33,9 @@ is gitignored and lives on one machine.
 
 ## Deploying
 
-Both Netlify and Vercel build from a private repository on their free tiers, so
-this can go up before the question in `data/README.md` about NASDAQ's terms is
-settled. Nothing server side runs and there are no environment variables.
+Both Netlify and Vercel build this static site directly from the repository on their
+free tiers, which work for both private and public repositories. Nothing server side
+runs and there are no environment variables.
 
 Netlify reads `netlify.toml` at the repository root and needs no dashboard
 configuration. Vercel reads `site/vercel.json`, and needs its **Root Directory**
@@ -50,11 +50,16 @@ find site -name '*.itch' -o -name '*.gz'
 
 ## What this page is allowed to state rather than read
 
-Two tables carry numbers that are not in any artifact: the hero's `std::map`
-comparison and the measurement section's arena curve. Both describe measurements
-the site does not ship artifacts for, both live in `src/content.ts`, and both cite
-the section of BENCHMARKS.md they came from. Everything else on the page, including
-the cross symbol sizing table, is read from JSON at load time.
+The hero's `std::map` comparison is read from `data/bench/baseline.json`, the same
+canonical artifact `scripts/sync_benchmarks.py` renders the BENCHMARKS.md tables
+from, so the page and the document cannot disagree. Every display string and ratio
+in that table is derived from the numeric fields there rather than typed out.
+
+One table still carries numbers that are not in any artifact: the measurement
+section's arena curve. It describes a sweep the site does not ship an artifact for,
+it lives in `src/content.ts`, and it cites the section of BENCHMARKS.md it came
+from. Everything else on the page, including the cross symbol sizing table, is read
+from JSON at load time.
 
 ## Things that are the way they are for a reason
 

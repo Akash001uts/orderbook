@@ -1,8 +1,8 @@
 import 'uplot/dist/uPlot.min.css'
 import './styles.css'
 
-import { loadIndex, loadLatency, loadSymbol } from './data'
-import type { IndexArtifact, IndexEntry, SymbolBundle } from './data'
+import { loadBaseline, loadIndex, loadLatency, loadSymbol } from './data'
+import type { BaselineArtifact, IndexArtifact, IndexEntry, SymbolBundle } from './data'
 import { LINKS, PROJECT, REPO_URL } from './content'
 import { decimal, element, integer, price, signedDecimal } from './format'
 import { heroPanel } from './panels/hero'
@@ -70,7 +70,16 @@ function linksPanel(): HTMLElement {
         element(
           'li',
           {},
-          element('span', { class: 'link-name' }, link.file),
+          element(
+            'a',
+            {
+              class: 'link-name',
+              href: `${REPO_URL}/blob/main/${link.file}`,
+              target: '_blank',
+              rel: 'noopener',
+            },
+            link.file,
+          ),
           element('span', { class: 'link-blurb' }, link.blurb),
         ),
       ),
@@ -78,9 +87,14 @@ function linksPanel(): HTMLElement {
     element(
       'p',
       { class: 'note' },
-      `The repository is ${REPO_URL} and is currently private, so those documents are not browsable from here yet. ` +
-        `It holds ${PROJECT.linesOfCpp} lines of C++ and the full artifact set this page reads. ` +
-        'Access on request.',
+      element('span', {}, 'The repository is at '),
+      element('a', { href: REPO_URL, target: '_blank', rel: 'noopener' }, REPO_URL),
+      element(
+        'span',
+        {},
+        '. It holds the C++ engine and the full artifact set this page reads, ' +
+          'and every document above links straight into it.',
+      ),
     ),
   )
 }
@@ -102,9 +116,10 @@ function errorPanel(error: unknown): HTMLElement {
 async function main(): Promise<void> {
   let index: IndexArtifact
   let latency: Awaited<ReturnType<typeof loadLatency>>
+  let baseline: BaselineArtifact
 
   try {
-    ;[index, latency] = await Promise.all([loadIndex(), loadLatency()])
+    ;[index, latency, baseline] = await Promise.all([loadIndex(), loadLatency(), loadBaseline()])
   } catch (error) {
     app.replaceChildren(errorPanel(error))
     return
@@ -180,7 +195,7 @@ async function main(): Promise<void> {
   })
 
   app.replaceChildren(
-    heroPanel(latency),
+    heroPanel(latency, baseline),
     symbolsSection,
     replayHost,
     backtestHost,

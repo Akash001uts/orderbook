@@ -161,8 +161,8 @@ new prices are common in a live book.
 
 **The evidence, measured rather than argued.** Phase 4 benchmarked this book
 against the naive `std::map` reference book on an identical command stream in one
-process. Add is 2.7x faster, cancel 5.4x. The mechanism is counted rather than
-inferred: the flat book allocates **0** times per add against the tree's **2.016**,
+process. Add is 2.8x faster, cancel 5.3x. The mechanism is counted rather than
+inferred: the flat book allocates **0** times per add against the tree's **2.064**,
 a figure that decomposes exactly into one list node, one hash node, and one map
 node per newly occupied level. The working set sweep shows the gap widening from
 2.4x to 3.3x as the book grows from 1 024 to 65 536 live orders, because the tree's

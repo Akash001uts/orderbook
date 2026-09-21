@@ -16,38 +16,19 @@ export interface Citation {
   section: string
 }
 
-export interface BaselineRow {
-  operation: string
-  flat: string
-  naive: string
-  ratio: string
-  faster: boolean
-}
-
-/** BENCHMARKS.md, "The std::map baseline". Both implementations take an identical
- *  command stream in one process, and the naive arm is the differential test's own
- *  oracle rather than a strawman. */
-export const BASELINE: BaselineRow[] = [
-  { operation: 'Add', flat: '26.9 ns', naive: '73.5 ns', ratio: '2.7x faster', faster: true },
-  { operation: 'Cancel', flat: '10.3 ns', naive: '56.0 ns', ratio: '5.4x faster', faster: true },
-  {
-    operation: 'Match one level',
-    flat: '38.7 ns',
-    naive: '65.2 ns',
-    ratio: '1.7x faster',
-    faster: true,
-  },
-  { operation: 'Best bid', flat: '10.2 ns', naive: '5.38 ns', ratio: '1.9x slower', faster: false },
-]
-
+/** BENCHMARKS.md, "The comparative baseline against std::map". The numbers
+ *  themselves are read from site/data/bench/baseline.json rather than stated here,
+ *  because that artifact is the single source the document and this site share. */
 export const BASELINE_CITATION: Citation = {
   document: 'BENCHMARKS.md',
-  section: 'The std::map baseline',
+  section: 'The comparative baseline against std::map',
 }
 
+// Footnote about allocations is generated from the baseline artifact in the hero
+// panel so it cannot drift from the published figures. These are the caveats that
+// do not depend on a specific number.
 export const HERO_FOOTNOTES: string[] = [
-  'The flat book loses the best price query, and that is the most useful thing the comparison found. std::map caches its extreme element as a pointer, so the bitmap’s three dependent loads cannot win. It is published here for the same reason it is published there.',
-  'Allocations per add are 0 against 2.016, and that 2.016 decomposes exactly: a list node and a hash node per add, plus 512 map nodes over 32 768 adds, predicting 2.0156 against 2.01599 measured.',
+  'The best price query was the one operation the flat book originally lost, 10.2 ns against the tree’s 5.38 ns, because std::map caches its extreme element while a bitmap descent is three dependent loads. Caching the final answer and repairing it lazily fixed it, and it is now below what the harness can resolve. The loss is published for the same reason it is there: reporting it first is what makes the fix believable.',
   'Ratios are the headline rather than the absolute nanoseconds. This machine drifted 2.6x on the same binary across one afternoon, so every comparison is taken from a paired run measured back to back in one process.',
   'There is no isolated core. Pinning is implemented and verified on both Windows and Linux, but pinning is not isolation, so maximum values are scheduling events rather than properties of the book. Percentiles to p99.99 are sound.',
 ]
@@ -103,9 +84,8 @@ export const MUTATION_CITATION: Citation = {
 /** Counts that describe the repository rather than a measurement. */
 export const PROJECT = {
   tests: 127,
-  ciJobs: 15,
+  ciJobs: 16,
   bugLogEntries: 8,
-  linesOfCpp: '13 557',
   compilers: 'GCC 16.1.0 and Clang 22.1.8',
   ciCompilers: 'GCC 13 and Clang 18',
   presets: 'debug, release, relwithdebinfo',

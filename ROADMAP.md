@@ -9,10 +9,11 @@ reasoning live in [DESIGN.md](DESIGN.md).
 
 ## Standing decisions
 
-**Repository visibility.** Private. Phase 6's documentation work is complete, but
-the owner has asked that the repository stay private for now, so it does. Two
-things gate any later flip: that instruction being lifted, and NASDAQ's terms on
-the committed data slice being confirmed. Neither is a documentation task.
+**Repository visibility.** Prepared for public release. Phase 6's documentation work
+is complete and the repository is licensed under MIT, with the Nasdaq-sourced data
+excluded from that grant. Flipping the repository to public is the owner's remaining
+step and is deliberately left until this work is merged and CI is green. See LICENSE,
+NOTICE, and data/README.md.
 
 **Effort allocation.** The four items below taught me the most relative to their
 cost, so they got disproportionate effort. Everything else is built
@@ -117,21 +118,18 @@ the HdrHistogram latency harness, and the measurement discipline all landed.
 
 The documentation work itself is done: the duplication the code review flagged
 is resolved, the design document has been audited against the code, and the README carries the
-headline table and a five command reproduction path. What remains is a decision and
-a permission, neither of which is a writing task.
+headline table and a five command reproduction path.
 
-- **Flipping the repository to public is deliberately deferred.** The owner asked
-  that it not happen yet, so it does not. Nothing in the documentation blocks it.
-- **Decide the market data question before any public flip.** The one genuine
-  blocker rather than a preference, and it is an owner decision rather than a
-  technical one. Both options are written up with their costs in
-  [data/README.md](data/README.md), "Before the repository goes public: the two
-  options": keep the committed 5.5 MB slice, or ship no data and rely on the fetch
-  script. A third middle path, replacing the slice with a semantically equivalent
-  synthetic fixture, is described there too along with what it gives up. Whichever
-  way the slice goes, `scripts/publish_dataset.sh` stays unrun until the question
-  is answered, because publishing the complete archive is the larger ask of the
-  two.
+- **The repository is licensed under MIT and ready to go public.** Nothing in the
+  documentation blocks the flip; making it is the owner's remaining step, deferred
+  until this work is merged and CI is green.
+- **The market data handling is defined.** The Nasdaq-sourced slice and the derived
+  artifacts are excluded from the MIT grant and redistributed on the assumption that
+  Nasdaq's permission is granted, subject to Nasdaq's terms, with the attribution
+  recorded in [data/README.md](data/README.md). Obtaining and retaining that
+  permission record is handled separately from this documentation.
+  `scripts/publish_dataset.sh` is still run deliberately rather than automatically,
+  because publishing the complete archive is the larger ask of the two.
 
 The architecture diagram was reviewed and kept as an ASCII sketch. It fits in a
 terminal, it survives a plain text diff, and it already shows the strategy layer

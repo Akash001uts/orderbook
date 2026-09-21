@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "tool": "ob_baseline_bench",
+  "version": "0.1.0",
+  "benchmark_command": "./out/build/release/ob_baseline_bench --benchmark_repetitions=9 --benchmark_report_aggregates_only=true",
+  "repetitions": 9,
+  "statistic": "median",
+  "rows": [
+    {
+      "id": "add",
+      "label": "Add",
+      "flat_ns": 30.5,
+      "naive_ns": 84.7,
+      "interpretation": "faster"
+    },
+    {
+      "id": "cancel",
+      "label": "Cancel",
+      "flat_ns": 11.5,
+      "naive_ns": 61.1,
+      "interpretation": "faster"
+    },
+    {
+      "id": "match",
+      "label": "Match, one level consumed",
+      "flat_ns": 32.2,
+      "naive_ns": 67.4,
+      "interpretation": "faster"
+    },
+    {
+      "id": "best_bid",
+      "label": "Best bid query",
+      "flat_ns": 0.26,
+      "naive_ns": 4.45,
+      "interpretation": "below_resolution"
+    }
+  ],
+  "query_noise_floor_ns": 0.17,
+  "allocations_per_add": {
+    "flat": 0,
+    "naive": 2.064
+  }
+}
