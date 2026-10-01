@@ -83,7 +83,9 @@ export const MUTATION_CITATION: Citation = {
 
 /** Counts that describe the repository rather than a measurement. */
 export const PROJECT = {
-  tests: 127,
+  // Registered ctest count as of 2026-09-23 (ctest --preset debug); 161 pass and
+  // one differential regression replay is skipped until a fixture is committed.
+  tests: 162,
   ciJobs: 16,
   bugLogEntries: 8,
   compilers: 'GCC 16.1.0 and Clang 22.1.8',
