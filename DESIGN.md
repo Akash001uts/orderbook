@@ -1265,7 +1265,11 @@ scope needs it, and adding it would mean either journalling undo information on 
 hot path or copying book state, both of which contradict the zero allocation rule
 for no gain in evidence.
 
-**A web UI.** No engineering signal.
+**A live order-entry UI.** A static web results site exists (see `site/`), because
+rendering committed artifacts carries real signal about what the engine produced.
+What is excluded is an interactive "submit an order, watch the book" front end: it
+has no engineering signal the artifacts do not already carry, and it would need the
+engine behind a server or compiled to WASM, which is a separate project.
 
 **A live trading connection.** Requires venue credentials and real capital, and
 adds risk without adding evidence.

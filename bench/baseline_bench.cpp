@@ -102,7 +102,7 @@ struct VectorSink {
 
   // Returns true: it grows rather than rejecting, so the engine's overflow policy
   // never fires here. The engine reads the result, so push must be bool.
-  bool push(const ExecutionEvent& event) const {
+  [[nodiscard]] bool push(const ExecutionEvent& event) const {
     out->push_back(event);
     return true;
   }
@@ -246,6 +246,39 @@ void bm_add_naive(benchmark::State& state) {
   }
 
   report_allocations(state, naive_allocations_per_add());
+}
+
+// The same flat add, but delivering into a bounded EventRing rather than the
+// always-accepting VectorSink. EventRing::push returns a runtime bool the compiler
+// cannot fold to a constant, so the engine's overflow-check branch stays live here
+// where it optimises away for VectorSink. The ring is sized well above the events a
+// single add emits and drained each iteration, so it never overflows: this isolates
+// the cost of the bool-returning sink contract for a bounded caller. It is
+// not part of the published std::map comparison; it exists only for that comparison.
+void bm_add_flat_bounded_sink(benchmark::State& state) {
+  ob::EventRing<64> ring;
+
+  std::unique_ptr<FlatEngine> engine;
+  std::uint64_t id = 1;
+
+  const auto rebuild = [&engine, &id]() {
+    engine = std::make_unique<FlatEngine>(flat_config());
+    id = 1;
+  };
+
+  rebuild();
+
+  for (auto unused : state) {
+    benchmark::DoNotOptimize(unused);
+    if (id > BASELINE_ORDERS) {
+      state.PauseTiming();
+      rebuild();
+      state.ResumeTiming();
+    }
+    ring.clear();
+    engine->submit(resting_add(id), ring);
+    ++id;
+  }
 }
 
 // -------------------------------------------------------------------------
@@ -575,6 +608,7 @@ void bm_sweep_naive(benchmark::State& state) {
 // comparison it is. No row here is meaningful without the row beside it.
 BENCHMARK(bm_add_flat);
 BENCHMARK(bm_add_naive);
+BENCHMARK(bm_add_flat_bounded_sink);
 BENCHMARK(bm_cancel_flat);
 BENCHMARK(bm_cancel_naive);
 BENCHMARK(bm_query_noise_floor);

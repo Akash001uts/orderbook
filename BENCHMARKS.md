@@ -351,8 +351,10 @@ argument rests on.
 
 Run with `ob_baseline_bench`, 9 repetitions, medians reported.
 
-Reissued at the current default arena of 16 384 slots and a working set of 8 192
+Reissued at the comparative workload's 16 384 slot arena and a working set of 8 192
 live orders, which is close to the 8 842 peak a full day of QQQ actually reaches.
+That 16 384 is the workload these comparisons are matched to, not the library
+default, which is 65 536.
 Both arms take the identical workload, in one process, so the ratios are paired
 even though the absolute figures drift between sessions.
 
@@ -647,15 +649,16 @@ and publishing only one would misrepresent the result.
 | Arena capacity | Working set | Quiet machine | Loaded machine |
 | --- | --- | --- | --- |
 | 4 096 | 0.16 MiB | 12.6 ns | 15.4 ns |
-| **16 384, the default** | **0.63 MiB** | **15.4 ns** | **20.0 ns** |
+| **16 384, the comparative workload** | **0.63 MiB** | **15.4 ns** | **20.0 ns** |
 | 18 432, one bucket above | 0.70 MiB | 15.9 ns | 22.6 ns |
-| 65 536, the old default | 2.5 MiB | 16.2 ns | 26.9 ns |
+| 65 536, the library default | 2.5 MiB | 16.2 ns | 26.9 ns |
 | 262 144 | 10 MiB | 29.2 ns | 67.6 ns |
 | 1 048 576 | 40 MiB | 71.8 ns | 132 ns |
 
 **What is robust and what is not.** The ordering is identical in both runs and a
 smaller arena is never worse, so the direction of the decision is sound. The
-magnitude is not robust at the near end: the default against the old 65 536 is 5
+magnitude is not robust at the near end: the 16 384 comparative workload against the
+65 536 library default is 5
 percent on the quiet run and 35 percent on the loaded one, and the bucket boundary
 costs 3 percent against 13 percent. That is not measurement error, it is the effect
 being measured. Arena size is a cache pressure effect, and how much cache pressure

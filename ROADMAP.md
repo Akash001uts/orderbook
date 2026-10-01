@@ -137,29 +137,32 @@ feeding the same engine as the replay path, which is the one relationship a read
 has to understand. A rendered image would look better and say the same thing while
 being invisible to every tool this project is read with.
 
-## Next work: the frontend
+## The frontend
 
-Accepted from the third review, not started. The sequencing matters more than the
-choice of framework.
+Accepted from the third review. Steps 1 and 2 below are built and shipped: the
+machine-readable artifacts and the static results site both exist (see `site/` and
+`site/README.md`). Step 3 remains deliberately deferred. The sequencing mattered
+more than the choice of framework, and it is recorded here as delivered rather than
+planned.
 
-**1. Machine-readable output first.** `itch_replay`, `ob_strategy_backtest` and
-`ob_latency_bench` all print human-formatted text, and this repository changes its
-wording deliberately and often. A frontend that scrapes stdout would break on the
-next edit. Each tool needs a `--json` flag emitting a stable schema; the structs
-already exist, `ReplayStats`, `PnlAccount`'s accessors, `CrossedBookStats`, and the
-sweep rows.
+**1. Machine-readable output first. Done.** `itch_replay`, `ob_strategy_backtest`
+and `ob_latency_bench` print human-formatted text, and this repository changes its
+wording deliberately and often, so a frontend that scraped stdout would break on the
+next edit. The tools instead emit stable JSON artifacts (schema in
+`site/data/SCHEMA.md`) derived from the existing structs, `ReplayStats`,
+`PnlAccount`'s accessors, `CrossedBookStats`, and the sweep rows.
 
-**2. Static charts second.** Everything this project produces is a static result of
-a deterministic replay: benchmark tables, sweep grids, markout curves, crossed-book
-statistics. A static site rendering committed JSON covers essentially the full
-value, needs no C++ toolchain to view, and sidesteps every question about running
-native code behind a web server.
+**2. Static charts second. Done.** Everything this project produces is a static
+result of a deterministic replay: benchmark tables, sweep grids, markout curves,
+crossed-book statistics. The static site in `site/` renders the committed JSON, needs
+no C++ toolchain to view, and sidesteps every question about running native code
+behind a web server.
 
-**3. WebAssembly only if an interactive demo earns its cost.** A live "submit an
-order, watch the book" demo needs the engine compiled to WASM or a backend service,
-which is a different and much larger project. The band, arena and event ring would
-compile without change, since there are no threads and no syscalls on the hot path,
-so the door stays open rather than being taken now.
+**3. WebAssembly only if an interactive demo earns its cost. Not done, by choice.**
+A live "submit an order, watch the book" demo needs the engine compiled to WASM or a
+backend service, which is a different and much larger project. The band, arena and
+event ring would compile without change, since there are no threads and no syscalls
+on the hot path, so the door stays open rather than being taken now.
 
 ## CI budget policy
 

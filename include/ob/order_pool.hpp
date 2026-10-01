@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <stdexcept>
 #include <vector>
 
 #include "ob/order.hpp"
@@ -29,9 +30,12 @@ namespace ob {
 // than bits per link is the right way round.
 class OrderPool {
  public:
-  explicit OrderPool(std::uint32_t capacity) : slots_(capacity) {
-    assert(capacity > 0);
-    assert(capacity < INVALID_INDEX);
+  // checked_capacity runs inside the member initializer list, before slots_ is
+  // constructed, so an invalid request throws rather than reaching an invalid free
+  // list (zero capacity has no slot 0 to seed the head) or attempting the
+  // reserved-sentinel-sized allocation. The former debug-only assertions vanished
+  // under NDEBUG, leaving this public constructor unguarded in release.
+  explicit OrderPool(std::uint32_t capacity) : slots_(checked_capacity(capacity)) {
     rebuild_free_list();
   }
 
@@ -108,6 +112,22 @@ class OrderPool {
   }
 
  private:
+  // Reject capacities that cannot back a valid arena, in debug and release alike,
+  // before any storage is allocated. Book validates the same bounds first through
+  // validate_config (with its own "Book:" message the engine tests assert), so this
+  // only fires on direct OrderPool construction. Both checks reference the shared
+  // INVALID_INDEX sentinel so the accepted range cannot drift between them.
+  [[nodiscard]] static std::uint32_t checked_capacity(std::uint32_t capacity) {
+    if (capacity == 0U) {
+      throw std::invalid_argument("OrderPool: capacity must be greater than zero");
+    }
+    if (capacity >= INVALID_INDEX) {
+      throw std::invalid_argument(
+          "OrderPool: capacity must be below the reserved INVALID_INDEX sentinel");
+    }
+    return capacity;
+  }
+
   // Walking the whole arena here is deliberate: it is the warmup that first
   // touches every page, so no later allocate pays a page fault. A benchmark that
   // measured that fault would be measuring the kernel, not the book.

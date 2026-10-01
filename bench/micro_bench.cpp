@@ -500,7 +500,7 @@ struct CountingSink {
 
   // Returns true: it counts every event and never rejects. The engine reads the
   // push result to enforce its overflow policy, so push must be bool.
-  bool push(const ExecutionEvent& /*event*/) noexcept {
+  [[nodiscard]] bool push(const ExecutionEvent& /*event*/) noexcept {
     ++events;
     return true;
   }

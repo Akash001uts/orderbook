@@ -118,16 +118,21 @@ int main() {
   drain(ring);
 
   // 4. An invalid configuration is reported by an exception at construction, before
-  // any storage is allocated. submit itself never throws.
+  // any storage is allocated. submit itself never throws. If construction were to
+  // succeed here the public contract would be broken, so the example exits nonzero
+  // rather than reporting success: that makes it a genuine smoke test of the
+  // rejection path rather than a program that always prints and returns zero.
   std::cout << "invalid configuration:\n";
+  int status = 0;
   try {
     DemoEngine::Config bad = config;
     bad.price.tick_size = 0;  // a zero tick size cannot be used to convert prices
     DemoEngine broken(bad);
     std::cout << "    unexpected: construction did not throw\n";
+    status = 1;
   } catch (const std::invalid_argument& error) {
     std::cout << "    rejected: " << error.what() << '\n';
   }
 
-  return 0;
+  return status;
 }

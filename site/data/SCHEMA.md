@@ -184,18 +184,30 @@ panel shows and for the baseline and allocation tables in BENCHMARKS.md, which
 benchmark run, then running that script, is the whole update path; the site derives
 every display string and ratio from the numeric fields here.
 
+Two validators enforce this contract and must stay in step: `scripts/sync_benchmarks.py`
+(Python) and `site/src/baseline.ts` (TypeScript). Their agreement is proven by the
+shared fixtures in `test/fixtures/benchmarks/`, which both test suites consume. If a
+field below disagrees with either validator, this document wins.
+
 | Field | Meaning |
 | --- | --- |
-| `schema` | This document's version. Currently 1. |
-| `tool` | `ob_baseline_bench`, the program the figures came from. |
-| `version` | Project version, matching the other artifacts. |
+| `schema` | This document's version. Must be the integer 1 exactly; `true` is rejected even though it equals 1 in some languages. |
+| `tool` | `ob_baseline_bench`, the program the figures came from. Non-empty and non-whitespace. |
+| `version` | Project version, matching the other artifacts. Non-empty and non-whitespace. |
 | `benchmark_command` | The exact command line that produces these numbers. |
-| `repetitions` | Benchmark repetitions behind each figure. |
+| `repetitions` | Benchmark repetitions behind each figure. A positive integer, never a boolean. |
 | `statistic` | The statistic reported, `median`. |
-| `rows[]` | One per operation: `id` a stable identifier, `label` a display string, `flat_ns` and `naive_ns` the two timings in nanoseconds, and `interpretation`. |
-| `rows[].interpretation` | `faster` when the flat book wins and the ratio is worth stating, or `below_resolution` when the figure is below what the harness can resolve and a ratio would mislead. The site chooses its wording from this rather than from the numbers. |
-| `query_noise_floor_ns` | The empty loop floor the best price query is measured against. |
-| `allocations_per_add.flat`, `.naive` | Allocations per add, counted exactly by the `operator new` replacement. Zero for the flat book. |
+| `rows[]` | Exactly one row for each of `add`, `cancel`, `match`, `best_bid`, and no other id: an unknown, duplicate, or missing id is rejected so an unsupported operation cannot appear in public output. Each row is `id` a stable identifier, `label` a non-whitespace display string, `flat_ns` and `naive_ns` the two timings in nanoseconds (finite and positive), and `interpretation`. The validators normalize rows to the canonical `add, cancel, match, best_bid` order, so a permuted-but-valid artifact renders identically. |
+| `rows[].interpretation` | `faster` when the flat book wins and the ratio is worth stating, or `below_resolution` when the figure is below what the harness can resolve and a ratio would mislead. A `faster` row must prove `flat_ns < naive_ns`, or it is rejected rather than rendering a misleading ratio. `best_bid` must be `below_resolution`, so an accepted below-resolution result cannot be promoted to a headline ratio without a reviewed schema or measurement change. The site chooses its wording from this rather than from the numbers. |
+| `query_noise_floor_ns` | The empty loop floor the best price query is measured against. Finite and non-negative. |
+| `allocations_per_add.flat`, `.naive` | Allocations per add, counted exactly by the `operator new` replacement. Finite and non-negative; zero for the flat book. |
+
+Display strings are formatted identically by both renderers: timings and allocations
+round to three decimals with decimal round-half-up taken from the value's shortest
+decimal representation (not the binary float), then trailing zeros and any bare
+decimal point are trimmed; ratios render at one decimal with the same round-half-up
+policy. Three decimals is the smallest precision that reproduces every accepted
+figure exactly, the naive allocation `2.064` being the tightest.
 
 ## `source.json`, per symbol directory
 

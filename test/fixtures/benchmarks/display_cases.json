@@ -1,0 +1,37 @@
+{
+  "_comment": "Shared display fixtures for the benchmark renderers. Consumed byte-for-byte by scripts/test_sync_benchmarks.py (number/ratio) and site/src/baseline.test.ts (formatNs/roundHalfUpDecimal). Kept outside site/data so it is never shipped as a measurement. See README.md in this directory.",
+  "format_ns": [
+    { "name": "accepted add flat", "value": 30.5, "expected": "30.5" },
+    { "name": "accepted best_bid naive", "value": 4.45, "expected": "4.45" },
+    { "name": "accepted best_bid flat", "value": 0.26, "expected": "0.26" },
+    { "name": "accepted noise floor", "value": 0.17, "expected": "0.17" },
+    { "name": "accepted naive allocation keeps three decimals", "value": 2.064, "expected": "2.064" },
+    { "name": "zero allocation", "value": 0, "expected": "0" },
+    { "name": "whole value drops decimal point", "value": 42, "expected": "42" },
+    { "name": "trailing zeros trimmed", "value": 1.2, "expected": "1.2" },
+    { "name": "audit example 30.555 is preserved", "value": 30.555, "expected": "30.555" },
+    { "name": "extra fractional digits round half up", "value": 30.5555, "expected": "30.556" },
+    { "name": "extra fractional digits round down", "value": 30.5554, "expected": "30.555" },
+    { "name": "half at the third decimal rounds up", "value": 2.0645, "expected": "2.065" },
+    { "name": "small positive at display precision", "value": 0.001, "expected": "0.001" },
+    { "name": "half below display precision rounds up", "value": 0.0005, "expected": "0.001" },
+    { "name": "below display precision rounds to zero", "value": 0.0004, "expected": "0" },
+    { "name": "carry across the integer boundary", "value": 9.9995, "expected": "10" },
+    { "name": "carry propagates through the integer part", "value": 100.9999, "expected": "101" },
+    { "name": "tiny value below display precision renders as zero", "value": 1e-7, "expected": "0" },
+    { "name": "smallest positive double renders as zero", "value": 5e-324, "expected": "0" },
+    { "name": "large value renders as fixed-point without an exponent", "value": 1e21, "expected": "1000000000000000000000" },
+    { "name": "large fractional value renders as fixed-point", "value": 1.23e21, "expected": "1230000000000000000000" },
+    { "name": "largest finite double renders as fixed-point", "value": 1.7976931348623157e308, "expected": "179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" },
+    { "name": "value rounding across a decimal boundary", "value": 123456789.98765, "expected": "123456789.988" }
+  ],
+  "format_ratio": [
+    { "name": "exact 1.25 midpoint rounds half up", "numerator": 5, "denominator": 4, "expected": "1.3" },
+    { "name": "exact 2.25 midpoint rounds half up", "numerator": 9, "denominator": 4, "expected": "2.3" },
+    { "name": "1.35 midpoint from decimal representation", "numerator": 1.35, "denominator": 1, "expected": "1.4" },
+    { "name": "1.05 midpoint from decimal representation", "numerator": 1.05, "denominator": 1, "expected": "1.1" },
+    { "name": "accepted add ratio", "numerator": 84.7, "denominator": 30.5, "expected": "2.8" },
+    { "name": "accepted cancel ratio", "numerator": 61.1, "denominator": 11.5, "expected": "5.3" },
+    { "name": "accepted match ratio", "numerator": 67.4, "denominator": 32.2, "expected": "2.1" }
+  ]
+}

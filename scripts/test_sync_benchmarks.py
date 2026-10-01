@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Regression checks for scripts/sync_benchmarks.py.
 
-Two groups:
+Three groups:
 
-  - the validator, which must reject a "faster" row that is not faster, negative
-    allocations, a missing noise floor, missing metadata, and empty labels, while
-    accepting a well formed artifact.
+  - display formatting, driven by test/fixtures/benchmarks/display_cases.json so the
+    number and ratio renderers agree byte-for-byte with the site's formatters.
+  - the validator, driven by test/fixtures/benchmarks/validation_cases.json (plus a
+    few in-code non-finite cases JSON cannot encode) so it accepts and rejects the
+    same inputs the site's validator does.
   - the region renderer, which must be idempotent, preserve the document's own line
-    endings (LF or CRLF), leave surrounding bytes untouched, and detect drift.
+    endings (LF or CRLF) and final-newline state, reject mixed conventions, leave
+    surrounding bytes untouched, and detect both document and artifact drift.
 
 Standard library only, run with:
 
@@ -15,6 +18,7 @@ Standard library only, run with:
 """
 
 import copy
+import json
 import sys
 from pathlib import Path
 
@@ -22,52 +26,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import sync_benchmarks as sb  # noqa: E402
 
+FIXTURES = sb.REPO_ROOT / "test" / "fixtures" / "benchmarks"
+
+
+def load_fixture(name):
+    with open(FIXTURES / name, "r", encoding="utf-8") as handle:
+        return json.load(handle)
+
 
 def good():
-    """A minimal artifact that must validate."""
-    return {
-        "schema": 1,
-        "tool": "ob_baseline_bench",
-        "version": "0.1.0",
-        "benchmark_command": "./ob_baseline_bench",
-        "repetitions": 9,
-        "statistic": "median",
-        "rows": [
-            {"id": "add", "label": "Add", "flat_ns": 30.5, "naive_ns": 84.7, "interpretation": "faster"},
-            {"id": "cancel", "label": "Cancel", "flat_ns": 11.5, "naive_ns": 61.1, "interpretation": "faster"},
-            {"id": "match", "label": "Match", "flat_ns": 32.2, "naive_ns": 67.4, "interpretation": "faster"},
-            {
-                "id": "best_bid",
-                "label": "Best bid",
-                "flat_ns": 0.26,
-                "naive_ns": 4.45,
-                "interpretation": "below_resolution",
-            },
-        ],
-        "query_noise_floor_ns": 0.17,
-        "allocations_per_add": {"flat": 0, "naive": 2.064},
-    }
-
-
-def expect_ok(name, data):
-    try:
-        sb.validate(data)
-    except sb.BaselineError as error:
-        raise AssertionError("%s: expected valid, raised %s" % (name, error))
-
-
-def expect_error(name, mutate):
-    data = copy.deepcopy(good())
-    mutate(data)
-    try:
-        sb.validate(data)
-    except sb.BaselineError:
-        return
-    raise AssertionError("%s: expected BaselineError, none raised" % name)
-
-
-def set_add(data, **fields):
-    data["rows"][0].update(fields)
+    """The canonical valid artifact, taken from the shared fixture so the Python and
+    TypeScript suites start from identical input."""
+    return copy.deepcopy(load_fixture("validation_cases.json")["base"])
 
 
 def check(name, condition):
@@ -75,45 +45,89 @@ def check(name, condition):
         raise AssertionError(name)
 
 
+def apply_case(base, case):
+    """Build a case's artifact from the shared base and its declarative edits. The
+    same operations are applied by site/src/baseline.test.ts."""
+    if "replace" in case:
+        return copy.deepcopy(case["replace"])
+    data = copy.deepcopy(base)
+    for key, value in case.get("set", {}).items():
+        data[key] = value
+    for key in case.get("delete", []):
+        data.pop(key, None)
+    if "rows" in case:
+        data["rows"] = copy.deepcopy(case["rows"])
+    if "alloc" in case:
+        data["allocations_per_add"] = copy.deepcopy(case["alloc"])
+    return data
+
+
+def display_cases():
+    fixture = load_fixture("display_cases.json")
+    for case in fixture["format_ns"]:
+        got = sb.number(case["value"])
+        check(
+            "format_ns %s: expected %r, got %r" % (case["name"], case["expected"], got),
+            got == case["expected"],
+        )
+    for case in fixture["format_ratio"]:
+        got = sb.ratio(case["numerator"], case["denominator"])
+        check(
+            "format_ratio %s: expected %r, got %r" % (case["name"], case["expected"], got),
+            got == case["expected"],
+        )
+
+
 def validator_cases():
-    expect_ok("baseline seed validates", good())
-
-    # The case the review reproduced: 100 ns vs 84.7 ns still marked faster would
-    # render "0.8x faster".
-    expect_error("faster row with flat above naive", lambda d: set_add(d, flat_ns=100.0))
-    expect_error("faster row with flat equal to naive", lambda d: set_add(d, flat_ns=84.7, naive_ns=84.7))
-
-    expect_error("negative flat allocations", lambda d: d["allocations_per_add"].__setitem__("flat", -1))
-    expect_error("negative naive allocations", lambda d: d["allocations_per_add"].__setitem__("naive", -0.5))
-
-    expect_error("missing noise floor", lambda d: d.pop("query_noise_floor_ns"))
-    expect_error("negative noise floor", lambda d: d.__setitem__("query_noise_floor_ns", -0.1))
-
-    expect_error("wrong schema", lambda d: d.__setitem__("schema", 2))
-    expect_error("missing required row", lambda d: d["rows"].pop())
-    expect_error("unknown interpretation", lambda d: set_add(d, interpretation="mystery"))
-    expect_error("non finite timing", lambda d: set_add(d, flat_ns=float("inf")))
-
-    # Shape and metadata: unknown input must be rejected, not trusted.
-    expect_error("missing tool", lambda d: d.pop("tool"))
-    expect_error("empty version", lambda d: d.__setitem__("version", ""))
-    expect_error("missing benchmark_command", lambda d: d.pop("benchmark_command"))
-    expect_error("non integer repetitions", lambda d: d.__setitem__("repetitions", 9.5))
-    expect_error("zero repetitions", lambda d: d.__setitem__("repetitions", 0))
-    expect_error("empty label", lambda d: set_add(d, label=""))
-    expect_error("row not an object", lambda d: d["rows"].__setitem__(0, "add"))
-    expect_error("duplicate row id", lambda d: d["rows"].append(copy.deepcopy(d["rows"][0])))
-
-    # Non-dict top level, checked directly since expect_error deep copies a dict.
-    for value in (None, [], "x", 3):
+    fixture = load_fixture("validation_cases.json")
+    base = fixture["base"]
+    for case in fixture["cases"]:
+        data = apply_case(base, case)
         try:
-            sb.validate(value)
+            sb.validate(data)
+            accepted = True
+        except sb.BaselineError:
+            accepted = False
+        check(
+            "%s: expected %s" % (case["name"], "valid" if case["valid"] else "invalid"),
+            accepted == case["valid"],
+        )
+
+    # Non-finite values cannot be encoded in JSON, so they are checked in code.
+    def set_add(d, **fields):
+        d["rows"][0].update(fields)
+
+    for name, mutate in (
+        ("infinite flat timing", lambda d: set_add(d, flat_ns=float("inf"))),
+        ("nan flat timing", lambda d: set_add(d, flat_ns=float("nan"))),
+        ("infinite noise floor", lambda d: d.__setitem__("query_noise_floor_ns", float("inf"))),
+        ("nan naive allocation", lambda d: d["allocations_per_add"].__setitem__("naive", float("nan"))),
+    ):
+        data = good()
+        mutate(data)
+        try:
+            sb.validate(data)
         except sb.BaselineError:
             continue
-        raise AssertionError("top level %r should be rejected" % (value,))
+        raise AssertionError("%s should be rejected" % name)
 
 
-def document(newline):
+def order_cases():
+    fixture = load_fixture("validation_cases.json")
+    base = fixture["base"]
+    for case in fixture["order_cases"]:
+        data = copy.deepcopy(base)
+        if "rows" in case:
+            data["rows"] = copy.deepcopy(case["rows"])
+        result = sb.validate(data)
+        got = [row["id"] for row in result["rows"]]
+        check(
+            "order %s: expected %r, got %r" % (case["name"], case["expected_order"], got),
+            got == case["expected_order"],
+        )
+
+
+def document(newline, trailing_newline=True):
     """A tiny document carrying both marker regions, joined with the given newline."""
     lines = [
         "# Title",
@@ -131,9 +145,11 @@ def document(newline):
         sb.ALLOC_END,
         "",
         "Trailing prose.",
-        "",
     ]
-    return newline.join(lines)
+    text = newline.join(lines)
+    if trailing_newline:
+        text += newline
+    return text
 
 
 def render_cases():
@@ -146,9 +162,17 @@ def render_cases():
         # Newline preservation: the rendered document uses only the input's endings.
         if newline == "\r\n":
             check("%s: keeps CRLF" % label, "\r\n" in once)
-            check("%s: introduces no bare LF" % label, once.replace("\r\n", "") .find("\n") == -1)
+            check("%s: introduces no bare LF" % label, once.replace("\r\n", "").find("\n") == -1)
         else:
             check("%s: stays LF" % label, "\r" not in once)
+
+        # The document's final-newline state is preserved in both directions.
+        check("%s: keeps final newline" % label, once.endswith(newline))
+        no_final = document(newline, trailing_newline=False)
+        check(
+            "%s: keeps absent final newline" % label,
+            not sb.render(no_final, data).endswith(newline),
+        )
 
         # Surrounding prose is untouched.
         check("%s: keeps intro" % label, "Intro prose that must survive untouched." in once)
@@ -166,6 +190,16 @@ def render_cases():
         twice = sb.render(once, data)
         check("%s: render is idempotent" % label, twice == once)
 
+    # A mixed-newline document is ambiguous and must be rejected, not silently
+    # normalized, so unrelated drift cannot hide inside a generated region.
+    mixed = document("\n").replace(sb.BASELINE_END, sb.BASELINE_END + "\r", 1)
+    try:
+        sb.render(mixed, data)
+    except sb.BaselineError:
+        pass
+    else:
+        raise AssertionError("mixed newline document should raise")
+
     # A missing marker is an error rather than a silent no-op.
     broken = document("\n").replace(sb.BASELINE_END, "")
     try:
@@ -175,13 +209,83 @@ def render_cases():
     else:
         raise AssertionError("missing end marker should raise")
 
+    # A duplicated region is ambiguous and must be rejected.
+    duplicated = document("\n") + "\n" + document("\n")
+    try:
+        sb.render(duplicated, data)
+    except sb.BaselineError:
+        pass
+    else:
+        raise AssertionError("duplicate markers should raise")
+
+    # A reversed marker pair (END before BEGIN) forms no complete region.
+    reversed_markers = "\n".join(
+        [sb.BASELINE_END, "body", sb.BASELINE_BEGIN, sb.ALLOC_BEGIN, "a", sb.ALLOC_END]
+    )
+    try:
+        sb.render(reversed_markers, data)
+    except sb.BaselineError:
+        pass
+    else:
+        raise AssertionError("reversed markers should raise")
+
+    def expect_render_raises(name, doc):
+        try:
+            sb.render(doc, data)
+        except sb.BaselineError:
+            return
+        raise AssertionError("%s should raise" % name)
+
+    # A missing begin marker leaves no complete region.
+    expect_render_raises("missing begin marker", document("\n").replace(sb.BASELINE_BEGIN, ""))
+
+    # A duplicate begin nested inside an otherwise complete region is exactly what a
+    # non-greedy regex would swallow; the independent token count must reject it.
+    dup_begin = document("\n").replace(
+        sb.BASELINE_BEGIN, sb.BASELINE_BEGIN + "\nstray\n" + sb.BASELINE_BEGIN, 1
+    )
+    expect_render_raises("duplicate begin marker", dup_begin)
+
+    # A duplicate end marker is equally ambiguous.
+    dup_end = document("\n").replace(sb.BASELINE_END, sb.BASELINE_END + "\n" + sb.BASELINE_END, 1)
+    expect_render_raises("duplicate end marker", dup_end)
+
+    # The allocation region wholly inside the baseline region: nested, not disjoint.
+    nested = "\n".join(
+        [
+            "intro",
+            sb.BASELINE_BEGIN,
+            sb.ALLOC_BEGIN,
+            "a",
+            sb.ALLOC_END,
+            sb.BASELINE_END,
+            "outro",
+        ]
+    )
+    expect_render_raises("nested regions", nested)
+
+    # Interleaved begin/end from the two regions: crossed, not disjoint.
+    crossed = "\n".join(
+        [sb.BASELINE_BEGIN, sb.ALLOC_BEGIN, sb.BASELINE_END, sb.ALLOC_END]
+    )
+    expect_render_raises("crossed regions", crossed)
+
     # Drift: hand editing a generated cell must not survive a re-render.
     drifted = sb.render(document("\n"), data).replace("30.5 ns", "99.9 ns")
-    check("drift is detected", sb.render(drifted, data) != drifted)
+    check("document drift is detected", sb.render(drifted, data) != drifted)
+
+    # Artifact drift: changing a source value must change the rendered document, so
+    # --check catches a stale table when the artifact moves.
+    rendered = sb.render(document("\n"), data)
+    moved = good()
+    moved["rows"][0]["flat_ns"] = 31.9
+    check("artifact drift is detected", sb.render(document("\n"), moved) != rendered)
 
 
 def main():
+    display_cases()
     validator_cases()
+    order_cases()
     render_cases()
     print("all sync_benchmarks checks passed")
     return 0

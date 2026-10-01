@@ -209,6 +209,19 @@ class ReferenceBook {
 
     Ticks limit{};
     if (!is_market) {
+      // Mirror the engine's classification exactly, using the same raw bounds and
+      // the same precedence: a raw price outside [min, max] is band_overflow, even
+      // in the one-to-tick_size-1 fringe just past an endpoint where
+      // representable() (a truncating quotient) would still say true and this would
+      // otherwise emit off_tick. Only an in-range price is then tested for grid
+      // alignment. Any divergence here would make differential agreement depend on
+      // which exact prices happen to be generated.
+      const std::int64_t raw = command.price.raw();
+      if (raw < price_config_.min_representable_raw() ||
+          raw > price_config_.max_representable_raw()) {
+        emit_reject(out, command, RejectReason::band_overflow);
+        return;
+      }
       if (!price_config_.on_tick_boundary(command.price)) {
         emit_reject(out, command, RejectReason::off_tick);
         return;

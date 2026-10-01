@@ -19,8 +19,14 @@ option(OB_BUILD_BENCH "Build the microbenchmark and latency harness targets" ON)
 option(OB_BUILD_TOOLS "Build the synthetic ITCH generator" ON)
 option(OB_BUILD_EXAMPLES "Build the runnable API example" ON)
 option(OB_BUILD_FUZZERS "Build the libFuzzer differential target, requires Clang" OFF)
-option(OB_NATIVE_ARCH "Compile with -march=native" ON)
-option(OB_WERROR "Treat warnings as errors" ON)
+# Default -march=native and warnings-as-errors ON only when orderbook is the top
+# level project. As a subproject (add_subdirectory) both default OFF so orderbook
+# cannot impose host-specific optimisation or its own warning policy on a consumer.
+# An explicit -DOB_NATIVE_ARCH / -DOB_WERROR or a set() before add_subdirectory
+# still wins, because CMP0077 (NEW since 3.13) lets option() honour an existing
+# variable.
+option(OB_NATIVE_ARCH "Compile with -march=native" ${PROJECT_IS_TOP_LEVEL})
+option(OB_WERROR "Treat warnings as errors" ${PROJECT_IS_TOP_LEVEL})
 
 # ---------------------------------------------------------------------------
 # Warning and optimisation flags.
@@ -92,6 +98,7 @@ set(OB_PUBLIC_HEADERS
   include/ob/price_level.hpp
   include/ob/level_bitmap.hpp
   include/ob/book.hpp
+  include/ob/engine.hpp
   include/ob/events.hpp)
 
 target_sources(ob PUBLIC FILE_SET HEADERS
@@ -391,6 +398,14 @@ if(OB_BUILD_BENCH)
   target_include_directories(ob_baseline_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test)
   target_link_libraries(ob_baseline_bench PRIVATE ob ob_flags ob_bench_flags benchmark::benchmark)
 
+  # Cross-version controlled benchmark driver. Built here from the
+  # current tree; the same source is compiled against the pre-hardening tree in a separate
+  # worktree so the only difference between the two arms is the engine.
+  add_executable(ob_ab_v1_bench
+    bench/ab_v1_bench.cpp)
+
+  target_link_libraries(ob_ab_v1_bench PRIVATE ob ob_flags ob_bench_flags benchmark::benchmark)
+
   # The measurement discipline: TSC timing with a verified invariance bit, core
   # pinning, turbo detection, and environment capture. Shared by anything that
   # publishes a number, and separate from any one benchmark because the
@@ -448,4 +463,13 @@ if(OB_BUILD_EXAMPLES)
     examples/engine_usage.cpp)
 
   target_link_libraries(ob_example PRIVATE ob ob_flags)
+
+  # Register the example as a smoke test when tests are also enabled (enable_testing
+  # runs only then). ctest builds and runs it and checks its exit code, which is
+  # nonzero if the invalid-configuration path is not rejected, so compilation alone
+  # is not mistaken for a working demonstration.
+  if(OB_BUILD_TESTS)
+    add_test(NAME Example.Runs COMMAND ob_example)
+    set_tests_properties(Example.Runs PROPERTIES LABELS smoke)
+  endif()
 endif()

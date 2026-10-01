@@ -5,18 +5,29 @@
 //
 //     node --experimental-strip-types src/baseline.test.ts
 //
-// The cases mirror scripts/test_sync_benchmarks.py so the TypeScript and Python
-// validators agree on what a valid artifact is. The .ts import extension is what
-// Node needs to resolve the module at runtime; allowImportingTsExtensions in
-// tsconfig lets tsc accept it too.
+// Validation and formatting cases come from test/fixtures/benchmarks/, the same
+// files scripts/test_sync_benchmarks.py consumes, so the TypeScript and Python
+// validators cannot drift apart: a divergence fails one suite. The .ts import
+// extension is what Node needs to resolve the module at runtime;
+// allowImportingTsExtensions in tsconfig lets tsc accept it too.
 
 import {
   BaselineError,
   formatNs,
   formatRatio,
+  roundHalfUpDecimal,
   validateBaseline,
+  RATIO_DECIMALS,
   type BaselineArtifact,
 } from './baseline.ts'
+import displayCasesRaw from '../../test/fixtures/benchmarks/display_cases.json' with { type: 'json' }
+import validationRaw from '../../test/fixtures/benchmarks/validation_cases.json' with { type: 'json' }
+
+// The fixtures are deliberately untyped here: they carry heterogeneous cases whose
+// shapes are the thing under test, so a precise type would fight the test rather
+// than help it.
+const displayCases = displayCasesRaw as any
+const validation = validationRaw as any
 
 let failures = 0
 
@@ -25,42 +36,72 @@ function fail(name: string, detail: string): void {
   console.error(`FAIL ${name}: ${detail}`)
 }
 
-function good(): Record<string, unknown> {
-  return {
-    schema: 1,
-    tool: 'ob_baseline_bench',
-    version: '0.1.0',
-    benchmark_command: './ob_baseline_bench',
-    repetitions: 9,
-    statistic: 'median',
-    rows: [
-      { id: 'add', label: 'Add', flat_ns: 30.5, naive_ns: 84.7, interpretation: 'faster' },
-      { id: 'cancel', label: 'Cancel', flat_ns: 11.5, naive_ns: 61.1, interpretation: 'faster' },
-      { id: 'match', label: 'Match', flat_ns: 32.2, naive_ns: 67.4, interpretation: 'faster' },
-      {
-        id: 'best_bid',
-        label: 'Best bid',
-        flat_ns: 0.26,
-        naive_ns: 4.45,
-        interpretation: 'below_resolution',
-      },
-    ],
-    query_noise_floor_ns: 0.17,
-    allocations_per_add: { flat: 0, naive: 2.064 },
+function expectEqual(name: string, actual: string, expected: string): void {
+  if (actual !== expected) {
+    fail(name, `expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
   }
 }
 
-function expectOk(name: string, value: unknown): void {
+// Apply a fixture case's declarative edits to the shared base. Mirrors
+// apply_case in scripts/test_sync_benchmarks.py.
+function applyCase(base: any, testCase: any): unknown {
+  if ('replace' in testCase) {
+    return structuredClone(testCase.replace)
+  }
+  const data = structuredClone(base)
+  if (testCase.set) {
+    Object.assign(data, testCase.set)
+  }
+  if (Array.isArray(testCase.delete)) {
+    for (const key of testCase.delete) {
+      delete data[key]
+    }
+  }
+  if ('rows' in testCase) {
+    data.rows = structuredClone(testCase.rows)
+  }
+  if ('alloc' in testCase) {
+    data.allocations_per_add = structuredClone(testCase.alloc)
+  }
+  return data
+}
+
+// Display formatting parity.
+for (const testCase of displayCases.format_ns) {
+  expectEqual(`format_ns ${testCase.name}`, formatNs(testCase.value), testCase.expected)
+}
+for (const testCase of displayCases.format_ratio) {
+  expectEqual(
+    `format_ratio ${testCase.name}`,
+    roundHalfUpDecimal(testCase.numerator / testCase.denominator, RATIO_DECIMALS),
+    testCase.expected,
+  )
+}
+
+// formatRatio wraps the same rounding with the "x faster" wording.
+const seed: BaselineArtifact = validateBaseline(structuredClone(validation.base))
+expectEqual('formatRatio add row', formatRatio(seed.rows[0]!), '2.8x faster')
+
+// Validation parity.
+for (const testCase of validation.cases) {
+  const data = applyCase(validation.base, testCase)
+  let accepted = true
   try {
-    validateBaseline(value)
+    validateBaseline(data)
   } catch (error) {
-    fail(name, `expected valid, threw ${String(error)}`)
+    accepted = false
+    if (!(error instanceof BaselineError)) {
+      fail(testCase.name, `threw the wrong error type ${String(error)}`)
+    }
+  }
+  if (accepted !== testCase.valid) {
+    fail(testCase.name, `expected ${testCase.valid ? 'valid' : 'invalid'}, got the opposite`)
   }
 }
 
-function expectError(name: string, mutate: (data: Record<string, unknown>) => void): void {
-  const data = good()
-  mutate(data)
+// Non-finite values cannot be encoded in JSON, so they are checked in code.
+function expectRejected(name: string, build: (base: any) => unknown): void {
+  const data = build(structuredClone(validation.base))
   try {
     validateBaseline(data)
     fail(name, 'expected BaselineError, none thrown')
@@ -70,101 +111,33 @@ function expectError(name: string, mutate: (data: Record<string, unknown>) => vo
     }
   }
 }
+expectRejected('infinite flat timing', (d) => {
+  d.rows[0].flat_ns = Number.POSITIVE_INFINITY
+  return d
+})
+expectRejected('nan flat timing', (d) => {
+  d.rows[0].flat_ns = Number.NaN
+  return d
+})
+expectRejected('infinite noise floor', (d) => {
+  d.query_noise_floor_ns = Number.POSITIVE_INFINITY
+  return d
+})
+expectRejected('nan naive allocation', (d) => {
+  d.allocations_per_add.naive = Number.NaN
+  return d
+})
 
-function rows(data: Record<string, unknown>): Array<Record<string, unknown>> {
-  return data.rows as Array<Record<string, unknown>>
-}
-
-function expectEqual(name: string, actual: string, expected: string): void {
-  if (actual !== expected) {
-    fail(name, `expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
+// Row-order normalization parity.
+for (const testCase of validation.order_cases) {
+  const data: any = structuredClone(validation.base)
+  if ('rows' in testCase) {
+    data.rows = structuredClone(testCase.rows)
   }
+  const result = validateBaseline(data)
+  const got = result.rows.map((row) => row.id).join(',')
+  expectEqual(`order ${testCase.name}`, got, (testCase.expected_order as string[]).join(','))
 }
-
-// Valid input.
-expectOk('baseline seed validates', good())
-
-// The reproduced case: still marked faster but flat is not below naive.
-expectError('faster row with flat above naive', (d) => {
-  rows(d)[0]!.flat_ns = 100
-})
-expectError('faster row with flat equal to naive', (d) => {
-  rows(d)[0]!.flat_ns = 84.7
-  rows(d)[0]!.naive_ns = 84.7
-})
-
-// Allocations and noise floor.
-expectError('negative flat allocations', (d) => {
-  ;(d.allocations_per_add as Record<string, unknown>).flat = -1
-})
-expectError('negative naive allocations', (d) => {
-  ;(d.allocations_per_add as Record<string, unknown>).naive = -0.5
-})
-expectError('missing noise floor', (d) => {
-  delete d.query_noise_floor_ns
-})
-expectError('negative noise floor', (d) => {
-  d.query_noise_floor_ns = -0.1
-})
-
-// Schema, rows, interpretations.
-expectError('wrong schema', (d) => {
-  d.schema = 2
-})
-expectError('missing required row', (d) => {
-  rows(d).pop()
-})
-expectError('unknown interpretation', (d) => {
-  rows(d)[0]!.interpretation = 'mystery'
-})
-expectError('non finite timing', (d) => {
-  rows(d)[0]!.flat_ns = Number.POSITIVE_INFINITY
-})
-expectError('duplicate row id', (d) => {
-  rows(d).push({ ...rows(d)[0]! })
-})
-
-// Shape and metadata: unknown input must be rejected.
-expectError('missing tool', (d) => {
-  delete d.tool
-})
-expectError('empty version', (d) => {
-  d.version = ''
-})
-expectError('missing benchmark_command', (d) => {
-  delete d.benchmark_command
-})
-expectError('non integer repetitions', (d) => {
-  d.repetitions = 9.5
-})
-expectError('zero repetitions', (d) => {
-  d.repetitions = 0
-})
-expectError('empty label', (d) => {
-  rows(d)[0]!.label = ''
-})
-expectError('row not an object', (d) => {
-  rows(d)[0] = 'add' as unknown as Record<string, unknown>
-})
-
-// Non-object top level, checked directly since expectError mutates a good() dict.
-for (const value of [null, undefined, [], 'x', 3]) {
-  try {
-    validateBaseline(value)
-    fail(`top level ${String(value)}`, 'expected BaselineError, none thrown')
-  } catch (error) {
-    if (!(error instanceof BaselineError)) {
-      fail(`top level ${String(value)}`, `threw the wrong error type ${String(error)}`)
-    }
-  }
-}
-
-// Formatting must match the Python renderer's %g and %.1f rules.
-const validated: BaselineArtifact = validateBaseline(good())
-expectEqual('formatNs trims trailing zero', formatNs(30.5), '30.5')
-expectEqual('formatNs keeps two decimals', formatNs(4.45), '4.45')
-expectEqual('formatNs whole number', formatNs(84.7), '84.7')
-expectEqual('formatRatio one decimal', formatRatio(validated.rows[0]!), '2.8x faster')
 
 if (failures > 0) {
   console.error(`${failures} baseline validator check(s) failed`)

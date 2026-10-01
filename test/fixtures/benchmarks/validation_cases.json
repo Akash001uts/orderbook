@@ -1,0 +1,208 @@
+{
+  "_comment": "Shared validation fixtures for the benchmark validators. Consumed by scripts/test_sync_benchmarks.py and site/src/baseline.test.ts so both agree on what a valid artifact is. Each case starts from `base`; then either `replace` swaps the whole artifact (for non-object tops) or `set`/`delete` edit top-level keys, `rows` replaces the rows value, and `alloc` replaces allocations_per_add. Non-finite values (Infinity, NaN) cannot be encoded in JSON and are covered by in-code cases in both test files.",
+  "base": {
+    "schema": 1,
+    "tool": "ob_baseline_bench",
+    "version": "0.1.0",
+    "benchmark_command": "./ob_baseline_bench",
+    "repetitions": 9,
+    "statistic": "median",
+    "rows": [
+      { "id": "add", "label": "Add", "flat_ns": 30.5, "naive_ns": 84.7, "interpretation": "faster" },
+      { "id": "cancel", "label": "Cancel", "flat_ns": 11.5, "naive_ns": 61.1, "interpretation": "faster" },
+      { "id": "match", "label": "Match", "flat_ns": 32.2, "naive_ns": 67.4, "interpretation": "faster" },
+      { "id": "best_bid", "label": "Best bid", "flat_ns": 0.26, "naive_ns": 4.45, "interpretation": "below_resolution" }
+    ],
+    "query_noise_floor_ns": 0.17,
+    "allocations_per_add": { "flat": 0, "naive": 2.064 }
+  },
+  "cases": [
+    { "name": "accepts the canonical artifact", "valid": true },
+
+    { "name": "rejects a boolean schema", "valid": false, "set": { "schema": true } },
+    { "name": "rejects schema 2", "valid": false, "set": { "schema": 2 } },
+    { "name": "rejects a string schema", "valid": false, "set": { "schema": "1" } },
+
+    { "name": "rejects an array top level", "valid": false, "replace": [] },
+    { "name": "rejects a string top level", "valid": false, "replace": "x" },
+    { "name": "rejects a null top level", "valid": false, "replace": null },
+    { "name": "rejects a number top level", "valid": false, "replace": 3 },
+
+    { "name": "rejects a missing tool", "valid": false, "delete": ["tool"] },
+    { "name": "rejects an empty tool", "valid": false, "set": { "tool": "" } },
+    { "name": "rejects a whitespace-only tool", "valid": false, "set": { "tool": "   " } },
+    { "name": "rejects a missing version", "valid": false, "delete": ["version"] },
+    { "name": "rejects a missing benchmark_command", "valid": false, "delete": ["benchmark_command"] },
+    { "name": "rejects a missing statistic", "valid": false, "delete": ["statistic"] },
+    { "name": "rejects a whitespace-only statistic", "valid": false, "set": { "statistic": " " } },
+
+    { "name": "rejects a boolean repetitions", "valid": false, "set": { "repetitions": true } },
+    { "name": "rejects a float repetitions", "valid": false, "set": { "repetitions": 9.5 } },
+    { "name": "rejects zero repetitions", "valid": false, "set": { "repetitions": 0 } },
+    { "name": "rejects negative repetitions", "valid": false, "set": { "repetitions": -3 } },
+
+    { "name": "rejects rows that are not a list", "valid": false, "rows": {} },
+    { "name": "rejects an empty rows list", "valid": false, "rows": [] },
+    { "name": "rejects a non-object row", "valid": false, "rows": [123] },
+
+    {
+      "name": "rejects a duplicate row id",
+      "valid": false,
+      "rows": [
+        { "id": "add", "label": "Add", "flat_ns": 30.5, "naive_ns": 84.7, "interpretation": "faster" },
+        { "id": "add", "label": "Add again", "flat_ns": 30.5, "naive_ns": 84.7, "interpretation": "faster" },
+        { "id": "cancel", "label": "Cancel", "flat_ns": 11.5, "naive_ns": 61.1, "interpretation": "faster" },
+        { "id": "match", "label": "Match", "flat_ns": 32.2, "naive_ns": 67.4, "interpretation": "faster" },
+        { "id": "best_bid", "label": "Best bid", "flat_ns": 0.26, "naive_ns": 4.45, "interpretation": "below_resolution" }
+      ]
+    },
+    {
+      "name": "rejects an unknown extra row id",
+      "valid": false,
+      "rows": [
+        { "id": "add", "label": "Add", "flat_ns": 30.5, "naive_ns": 84.7, "interpretation": "faster" },
+        { "id": "cancel", "label": "Cancel", "flat_ns": 11.5, "naive_ns": 61.1, "interpretation": "faster" },
+        { "id": "match", "label": "Match", "flat_ns": 32.2, "naive_ns": 67.4, "interpretation": "faster" },
+        { "id": "best_bid", "label": "Best bid", "flat_ns": 0.26, "naive_ns": 4.45, "interpretation": "below_resolution" },
+        { "id": "modify", "label": "Modify", "flat_ns": 20.0, "naive_ns": 50.0, "interpretation": "faster" }
+      ]
+    },
+    {
+      "name": "rejects a missing required row",
+      "valid": false,
+      "rows": [
+        { "id": "add", "label": "Add", "flat_ns": 30.5, "naive_ns": 84.7, "interpretation": "faster" },
+        { "id": "cancel", "label": "Cancel", "flat_ns": 11.5, "naive_ns": 61.1, "interpretation": "faster" },
+        { "id": "match", "label": "Match", "flat_ns": 32.2, "naive_ns": 67.4, "interpretation": "faster" }
+      ]
+    },
+    {
+      "name": "rejects a whitespace-only label",
+      "valid": false,
+      "rows": [
+        { "id": "add", "label": "  ", "flat_ns": 30.5, "naive_ns": 84.7, "interpretation": "faster" },
+        { "id": "cancel", "label": "Cancel", "flat_ns": 11.5, "naive_ns": 61.1, "interpretation": "faster" },
+        { "id": "match", "label": "Match", "flat_ns": 32.2, "naive_ns": 67.4, "interpretation": "faster" },
+        { "id": "best_bid", "label": "Best bid", "flat_ns": 0.26, "naive_ns": 4.45, "interpretation": "below_resolution" }
+      ]
+    },
+    {
+      "name": "rejects a boolean flat_ns",
+      "valid": false,
+      "rows": [
+        { "id": "add", "label": "Add", "flat_ns": true, "naive_ns": 84.7, "interpretation": "faster" },
+        { "id": "cancel", "label": "Cancel", "flat_ns": 11.5, "naive_ns": 61.1, "interpretation": "faster" },
+        { "id": "match", "label": "Match", "flat_ns": 32.2, "naive_ns": 67.4, "interpretation": "faster" },
+        { "id": "best_bid", "label": "Best bid", "flat_ns": 0.26, "naive_ns": 4.45, "interpretation": "below_resolution" }
+      ]
+    },
+    {
+      "name": "rejects a string flat_ns",
+      "valid": false,
+      "rows": [
+        { "id": "add", "label": "Add", "flat_ns": "30", "naive_ns": 84.7, "interpretation": "faster" },
+        { "id": "cancel", "label": "Cancel", "flat_ns": 11.5, "naive_ns": 61.1, "interpretation": "faster" },
+        { "id": "match", "label": "Match", "flat_ns": 32.2, "naive_ns": 67.4, "interpretation": "faster" },
+        { "id": "best_bid", "label": "Best bid", "flat_ns": 0.26, "naive_ns": 4.45, "interpretation": "below_resolution" }
+      ]
+    },
+    {
+      "name": "rejects a zero flat_ns",
+      "valid": false,
+      "rows": [
+        { "id": "add", "label": "Add", "flat_ns": 0, "naive_ns": 84.7, "interpretation": "faster" },
+        { "id": "cancel", "label": "Cancel", "flat_ns": 11.5, "naive_ns": 61.1, "interpretation": "faster" },
+        { "id": "match", "label": "Match", "flat_ns": 32.2, "naive_ns": 67.4, "interpretation": "faster" },
+        { "id": "best_bid", "label": "Best bid", "flat_ns": 0.26, "naive_ns": 4.45, "interpretation": "below_resolution" }
+      ]
+    },
+    {
+      "name": "rejects a negative naive_ns",
+      "valid": false,
+      "rows": [
+        { "id": "add", "label": "Add", "flat_ns": 30.5, "naive_ns": -1, "interpretation": "faster" },
+        { "id": "cancel", "label": "Cancel", "flat_ns": 11.5, "naive_ns": 61.1, "interpretation": "faster" },
+        { "id": "match", "label": "Match", "flat_ns": 32.2, "naive_ns": 67.4, "interpretation": "faster" },
+        { "id": "best_bid", "label": "Best bid", "flat_ns": 0.26, "naive_ns": 4.45, "interpretation": "below_resolution" }
+      ]
+    },
+    {
+      "name": "rejects an unknown interpretation",
+      "valid": false,
+      "rows": [
+        { "id": "add", "label": "Add", "flat_ns": 30.5, "naive_ns": 84.7, "interpretation": "mystery" },
+        { "id": "cancel", "label": "Cancel", "flat_ns": 11.5, "naive_ns": 61.1, "interpretation": "faster" },
+        { "id": "match", "label": "Match", "flat_ns": 32.2, "naive_ns": 67.4, "interpretation": "faster" },
+        { "id": "best_bid", "label": "Best bid", "flat_ns": 0.26, "naive_ns": 4.45, "interpretation": "below_resolution" }
+      ]
+    },
+    {
+      "name": "rejects a faster row with a slower flat arm",
+      "valid": false,
+      "rows": [
+        { "id": "add", "label": "Add", "flat_ns": 100, "naive_ns": 84.7, "interpretation": "faster" },
+        { "id": "cancel", "label": "Cancel", "flat_ns": 11.5, "naive_ns": 61.1, "interpretation": "faster" },
+        { "id": "match", "label": "Match", "flat_ns": 32.2, "naive_ns": 67.4, "interpretation": "faster" },
+        { "id": "best_bid", "label": "Best bid", "flat_ns": 0.26, "naive_ns": 4.45, "interpretation": "below_resolution" }
+      ]
+    },
+    {
+      "name": "rejects a faster row at a tie",
+      "valid": false,
+      "rows": [
+        { "id": "add", "label": "Add", "flat_ns": 84.7, "naive_ns": 84.7, "interpretation": "faster" },
+        { "id": "cancel", "label": "Cancel", "flat_ns": 11.5, "naive_ns": 61.1, "interpretation": "faster" },
+        { "id": "match", "label": "Match", "flat_ns": 32.2, "naive_ns": 67.4, "interpretation": "faster" },
+        { "id": "best_bid", "label": "Best bid", "flat_ns": 0.26, "naive_ns": 4.45, "interpretation": "below_resolution" }
+      ]
+    },
+    {
+      "name": "rejects best_bid marked faster so it cannot become a headline ratio",
+      "valid": false,
+      "rows": [
+        { "id": "add", "label": "Add", "flat_ns": 30.5, "naive_ns": 84.7, "interpretation": "faster" },
+        { "id": "cancel", "label": "Cancel", "flat_ns": 11.5, "naive_ns": 61.1, "interpretation": "faster" },
+        { "id": "match", "label": "Match", "flat_ns": 32.2, "naive_ns": 67.4, "interpretation": "faster" },
+        { "id": "best_bid", "label": "Best bid", "flat_ns": 0.26, "naive_ns": 4.45, "interpretation": "faster" }
+      ]
+    },
+
+    {
+      "name": "rejects a faster row whose finite operands yield a non-finite ratio",
+      "valid": false,
+      "rows": [
+        { "id": "add", "label": "Add", "flat_ns": 5e-324, "naive_ns": 1e308, "interpretation": "faster" },
+        { "id": "cancel", "label": "Cancel", "flat_ns": 11.5, "naive_ns": 61.1, "interpretation": "faster" },
+        { "id": "match", "label": "Match", "flat_ns": 32.2, "naive_ns": 67.4, "interpretation": "faster" },
+        { "id": "best_bid", "label": "Best bid", "flat_ns": 0.26, "naive_ns": 4.45, "interpretation": "below_resolution" }
+      ]
+    },
+
+    { "name": "rejects a missing noise floor", "valid": false, "delete": ["query_noise_floor_ns"] },
+    { "name": "rejects a boolean noise floor", "valid": false, "set": { "query_noise_floor_ns": true } },
+    { "name": "rejects a negative noise floor", "valid": false, "set": { "query_noise_floor_ns": -0.1 } },
+    { "name": "accepts a zero noise floor", "valid": true, "set": { "query_noise_floor_ns": 0 } },
+
+    { "name": "rejects missing allocations", "valid": false, "delete": ["allocations_per_add"] },
+    { "name": "rejects allocations missing naive", "valid": false, "alloc": { "flat": 0 } },
+    { "name": "rejects a boolean allocation", "valid": false, "alloc": { "flat": true, "naive": 2 } },
+    { "name": "rejects a negative allocation", "valid": false, "alloc": { "flat": -1, "naive": 2 } },
+    { "name": "accepts zero allocations on both arms", "valid": true, "alloc": { "flat": 0, "naive": 0 } }
+  ],
+  "order_cases": [
+    {
+      "name": "permuted rows normalize to canonical order",
+      "rows": [
+        { "id": "best_bid", "label": "Best bid", "flat_ns": 0.26, "naive_ns": 4.45, "interpretation": "below_resolution" },
+        { "id": "match", "label": "Match", "flat_ns": 32.2, "naive_ns": 67.4, "interpretation": "faster" },
+        { "id": "cancel", "label": "Cancel", "flat_ns": 11.5, "naive_ns": 61.1, "interpretation": "faster" },
+        { "id": "add", "label": "Add", "flat_ns": 30.5, "naive_ns": 84.7, "interpretation": "faster" }
+      ],
+      "expected_order": ["add", "cancel", "match", "best_bid"]
+    },
+    {
+      "name": "already-canonical order is preserved",
+      "expected_order": ["add", "cancel", "match", "best_bid"]
+    }
+  ]
+}

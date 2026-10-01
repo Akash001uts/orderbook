@@ -95,7 +95,13 @@ class Engine {
   using BookType = Book<BandLevels>;
   using Config = BookType::Config;
 
-  explicit Engine(const Config& config) : book_(config) {}
+  // book_(config) validates the configuration first. The representable-price bounds
+  // are then derived once here, at the cold construction boundary, so the per-command
+  // path checks two comparisons rather than repeating a division on every add.
+  explicit Engine(const Config& config)
+      : book_(config),
+        min_price_raw_(config.price.min_representable_raw()),
+        max_price_raw_(config.price.max_representable_raw()) {}
 
   [[nodiscard]] const BookType& book() const noexcept { return book_; }
 
@@ -108,14 +114,26 @@ class Engine {
   // Sink is a template parameter so the append inlines. A std::function or a
   // virtual sink would put an indirect call on every fill, which the compiler
   // could neither inline nor optimise across. A Sink must expose
-  // `bool push(const ExecutionEvent&)`, returning false only when it is full.
+  // `bool push(const ExecutionEvent&)`, returning false only when it is full and
+  // true otherwise. A sink that cannot reject (an unbounded or discarding one)
+  // returns true unconditionally, and the overflow branch folds away for it.
   //
-  // Capacity is the caller's responsibility. One command can emit more than one
-  // event: a marketable order emits a fill per resting order it consumes, plus a
-  // terminal cancel or book update, so the sink must hold at least that many. This
-  // call is noexcept and does not roll back; a sink that rejects a push is a fatal
-  // sizing error and aborts the process rather than dropping the event. Drain the
-  // sink between commands so it starts each command empty.
+  // Source-compatibility note: push returns bool. It was previously void, so a
+  // custom sink that declared `void push(const ExecutionEvent&)` no longer
+  // compiles and must be updated to return bool. This is deliberate: emit reads the
+  // result to enforce the overflow policy, and a void push gave it nothing to read.
+  //
+  // Capacity is the caller's responsibility, and one command can emit many events:
+  //   - a marketable order emits a fill per resting order it consumes, across as
+  //     many price levels as it sweeps, plus a terminal cancel or book update;
+  //   - self-trade prevention can emit a cancel per resting order it removes;
+  //   - a modify emits a book update, and a resting add emits a book update.
+  // Size the sink for the largest such burst, not for one event per level. If the
+  // same sink accumulates across several commands without being drained, size it
+  // for the sum. This call is noexcept and does not roll back: a sink that rejects
+  // a push is a fatal sizing error and aborts the process (in debug and release
+  // alike) rather than dropping an event, continuing, or unwinding a half-applied
+  // command. Drain the sink between commands so it starts each command empty.
   template <typename Sink>
   void submit(const Command& command, Sink& sink) noexcept {
     switch (command.type) {
@@ -223,6 +241,16 @@ class Engine {
     if (command.order_type == OrderType::market) {
       limit = command.side == Side::buy ? Ticks{MOST_AGGRESSIVE_BUY} : Ticks{MOST_AGGRESSIVE_SELL};
     } else {
+      // A price outside the representable domain cannot be converted to a tick
+      // without signed overflow, and no band or cold level could hold it, so reject
+      // it before on_tick_boundary forms the subtraction that would overflow. The
+      // bounds were derived once at construction, so this is two comparisons rather
+      // than the division PriceConfig::representable performs.
+      const std::int64_t raw = command.price.raw();
+      if (raw < min_price_raw_ || raw > max_price_raw_) {
+        emit_reject(sink, command, RejectReason::band_overflow);
+        return;
+      }
       if (!price_config.on_tick_boundary(command.price)) {
         emit_reject(sink, command, RejectReason::off_tick);
         return;
@@ -570,6 +598,9 @@ class Engine {
 
   BookType book_;
   Sequence next_sequence_{1};
+  // Precomputed at construction from the price config; see submit_add.
+  std::int64_t min_price_raw_;
+  std::int64_t max_price_raw_;
 };
 
 }  // namespace ob

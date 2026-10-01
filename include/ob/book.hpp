@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -579,6 +580,17 @@ class Book {
     }
     if (const char* error = config.price.validity_error(); error != nullptr) {
       throw std::invalid_argument(std::string("Book: ") + error);
+    }
+    // The band derived from initial_center must fit entirely within the Ticks
+    // (int32) range, or centre_to_base and later rebases would overflow. The band
+    // spans [centre - BandLevels/2, centre - BandLevels/2 + BandLevels - 1].
+    constexpr auto HALF = static_cast<std::int64_t>(BandLevels / 2);
+    constexpr std::int64_t SPAN_ABOVE = static_cast<std::int64_t>(BandLevels) - 1 - HALF;
+    const std::int64_t centre = config.initial_center.raw();
+    if (centre - HALF < std::numeric_limits<std::int32_t>::min() ||
+        centre + SPAN_ABOVE > std::numeric_limits<std::int32_t>::max()) {
+      throw std::invalid_argument(
+          "Book: initial_center places the price band outside the representable tick range");
     }
   }
 

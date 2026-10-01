@@ -23,6 +23,7 @@ import json
 import math
 import re
 import sys
+from decimal import Decimal, ROUND_HALF_UP, localcontext
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -30,6 +31,22 @@ ARTIFACT = REPO_ROOT / "site" / "data" / "bench" / "baseline.json"
 DOCUMENT = REPO_ROOT / "BENCHMARKS.md"
 
 REQUIRED_ROW_IDS = ("add", "cancel", "match", "best_bid")
+
+# The single numeric display policy, shared byte-for-byte with site/src/baseline.ts.
+# Timings and allocations round to DISPLAY_DECIMALS and then drop trailing zeros;
+# ratios render at RATIO_DECIMALS with no trimming. DISPLAY_DECIMALS is 3 because
+# that is the smallest precision that reproduces every accepted artifact string
+# exactly (the naive allocation figure 2.064 has three fractional digits); a
+# smaller cap would silently rewrite a published number. Rounding is decimal
+# round-half-up taken from each value's shortest decimal representation, never from
+# the binary float, so 30.555 renders "30.555" and a ratio of exactly 1.25 renders
+# "1.3" in both languages rather than diverging on IEEE-754 rounding.
+DISPLAY_DECIMALS = 3
+RATIO_DECIMALS = 1
+
+# Wide enough to quantize the largest finite double (about 309 integer digits) to
+# DISPLAY_DECIMALS without the decimal module raising InvalidOperation.
+ROUND_CONTEXT_PREC = 400
 
 BASELINE_BEGIN = "<!-- BEGIN GENERATED baseline (scripts/sync_benchmarks.py) -->"
 BASELINE_END = "<!-- END GENERATED baseline -->"
@@ -41,12 +58,45 @@ class BaselineError(Exception):
     """Raised when the artifact does not satisfy the schema this script expects."""
 
 
+def _round_half_up(value, places):
+    """Round a finite non-negative number to `places` decimals with decimal
+    round-half-up, taken from the value's shortest decimal representation rather
+    than the binary float. Returns a fixed-point string with exactly `places`
+    fractional digits (no exponent). site/src/baseline.ts implements the same
+    routine so the two renderers agree to the byte."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise BaselineError("cannot format non-number %r" % (value,))
+    if isinstance(value, float) and not math.isfinite(value):
+        raise BaselineError("cannot format non-finite value %r" % (value,))
+    if value < 0:
+        raise BaselineError("cannot format negative value %r" % (value,))
+    quantum = Decimal(1).scaleb(-places)
+    # A high enough precision that quantizing the largest representable double to
+    # `places` decimals cannot raise InvalidOperation. The default 28-digit context
+    # cannot hold a ~309-digit coefficient, so a legal but huge timing would fail to
+    # render; ROUND_CONTEXT_PREC covers the full finite double range. Decimal(str())
+    # is exact regardless of context, so only the quantize needs the wider context.
+    with localcontext() as ctx:
+        ctx.prec = ROUND_CONTEXT_PREC
+        return format(Decimal(str(value)).quantize(quantum, rounding=ROUND_HALF_UP), "f")
+
+
 def number(value):
-    """Format a number the way the tables do: no decimal point on whole values,
-    and no trailing zeros otherwise, so the rendered bytes are stable."""
-    if value == int(value):
-        return str(int(value))
-    return "%g" % value
+    """Format a timing or allocation figure: decimal round-half-up to
+    DISPLAY_DECIMALS, then drop trailing zeros and any bare decimal point so whole
+    values render without one and the rendered bytes stay stable."""
+    text = _round_half_up(value, DISPLAY_DECIMALS)
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text
+
+
+def ratio(numerator, denominator):
+    """Format a "faster" ratio at RATIO_DECIMALS with the shared round-half-up
+    policy. The division is IEEE-754, identical to the site, and the rounding is
+    taken from that quotient's decimal representation, so an exact 1.25 renders
+    "1.3" here and in the site rather than diverging on binary rounding."""
+    return _round_half_up(numerator / denominator, RATIO_DECIMALS)
 
 
 def load_artifact(path):
@@ -63,8 +113,10 @@ def load_artifact(path):
 
 def _require_string(record, field):
     value = record.get(field)
-    if not isinstance(value, str) or not value:
-        raise BaselineError("%s must be a non-empty string" % field)
+    # Reject whitespace-only as well as empty: a metadata field or label that is
+    # only spaces would otherwise reach public output as a blank cell.
+    if not isinstance(value, str) or not value.strip():
+        raise BaselineError("%s must be a non-empty, non-whitespace string" % field)
     return value
 
 
@@ -75,8 +127,12 @@ def validate(data):
     if not isinstance(data, dict):
         raise BaselineError("top level must be an object")
 
-    if data.get("schema") != 1:
-        raise BaselineError("expected schema 1, found %r" % data.get("schema"))
+    # schema must be the integer 1, not True. In Python True == 1, so a bare
+    # inequality would accept schema: true; exclude bool explicitly to stay in
+    # step with the site's strict === 1 comparison.
+    schema = data.get("schema")
+    if isinstance(schema, bool) or schema != 1:
+        raise BaselineError("expected schema 1, found %r" % (schema,))
 
     _require_string(data, "tool")
     _require_string(data, "version")
@@ -90,14 +146,14 @@ def validate(data):
     if not isinstance(rows, list) or not rows:
         raise BaselineError("rows must be a non-empty list")
 
-    seen = set()
+    by_id = {}
     for row in rows:
         if not isinstance(row, dict):
             raise BaselineError("every row must be an object")
         row_id = _require_string(row, "id")
-        if row_id in seen:
+        if row_id in by_id:
             raise BaselineError("duplicate row id %r" % row_id)
-        seen.add(row_id)
+        by_id[row_id] = row
         _require_string(row, "label")
         for field in ("flat_ns", "naive_ns"):
             value = row.get(field)
@@ -116,15 +172,42 @@ def validate(data):
         # A "faster" row renders a ratio, so the flat book must genuinely be faster.
         # Without this a row where flat >= naive would render a misleading "0.8x
         # faster" from an interpretation that no longer matches the measurements.
-        if interpretation == "faster" and row["naive_ns"] <= row["flat_ns"]:
+        if interpretation == "faster":
+            if row["naive_ns"] <= row["flat_ns"]:
+                raise BaselineError(
+                    "row %r is marked faster but flat %r is not below naive %r"
+                    % (row_id, row["flat_ns"], row["naive_ns"])
+                )
+            # The derived ratio must itself be finite and positive. Individually
+            # finite operands can still overflow to a non-finite quotient (a tiny
+            # flat against a huge naive), which would otherwise reach the renderer.
+            # Python yields inf here where JavaScript yields Infinity; both are the
+            # same rejection.
+            derived = row["naive_ns"] / row["flat_ns"]
+            if not math.isfinite(derived) or derived <= 0:
+                raise BaselineError(
+                    "row %r has a non-finite ratio %r" % (row_id, derived)
+                )
+        # best_bid is an accepted below-resolution result. Pinning its
+        # interpretation keeps it from being promoted to a headline ratio without a
+        # reviewed schema or measurement change.
+        if row_id == "best_bid" and interpretation != "below_resolution":
             raise BaselineError(
-                "row %r is marked faster but flat %r is not below naive %r"
-                % (row_id, row["flat_ns"], row["naive_ns"])
+                "row 'best_bid' must be below_resolution, found %r" % (interpretation,)
             )
 
-    missing = [row_id for row_id in REQUIRED_ROW_IDS if row_id not in seen]
+    # Require exactly the supported set: every required id present, and no others,
+    # so an unsupported operation cannot silently appear in public output.
+    missing = [row_id for row_id in REQUIRED_ROW_IDS if row_id not in by_id]
     if missing:
         raise BaselineError("missing required row ids: %s" % ", ".join(missing))
+    unknown = [row_id for row_id in by_id if row_id not in REQUIRED_ROW_IDS]
+    if unknown:
+        raise BaselineError("unknown row ids: %s" % ", ".join(sorted(unknown)))
+
+    # Normalize to the canonical order so a permuted-but-valid artifact renders
+    # identically. REQUIRED_ROW_IDS is the one authoritative order.
+    data["rows"] = [by_id[row_id] for row_id in REQUIRED_ROW_IDS]
 
     floor = data.get("query_noise_floor_ns")
     if not isinstance(floor, (int, float)) or isinstance(floor, bool):
@@ -165,7 +248,7 @@ def baseline_table(data, newline):
         else:
             flat_cell = "%s ns" % flat
             naive_cell = "%s ns" % naive
-            ratio_cell = "**%.1fx faster**" % (row["naive_ns"] / row["flat_ns"])
+            ratio_cell = "**%sx faster**" % ratio(row["naive_ns"], row["flat_ns"])
         lines.append("| %s | %s | %s | %s |" % (row["label"], flat_cell, naive_cell, ratio_cell))
     return newline.join(lines)
 
@@ -195,9 +278,59 @@ def replace_region(text, begin, end, table, newline):
     return new_text
 
 
+def detect_newline(document_text):
+    """Return the document's single newline convention, or reject a mixed one.
+
+    A document that mixes CRLF and LF (or carries a bare CR) is ambiguous: picking
+    one convention would silently rewrite the other inside the generated regions and
+    could hide unrelated drift. Fail clearly instead."""
+    without_crlf = document_text.replace("\r\n", "")
+    has_crlf = "\r\n" in document_text
+    if "\r" in without_crlf or (has_crlf and "\n" in without_crlf):
+        raise BaselineError("document mixes newline conventions; use only LF or only CRLF")
+    return "\r\n" if has_crlf else "\n"
+
+
+def validate_markers(text):
+    """Fail closed on any ambiguous generated-region marker layout before a single
+    byte is replaced.
+
+    The regex substitution alone is not enough: a non-greedy begin-to-end match can
+    swallow a second begin marker nested inside one region while still reporting one
+    match, so a malformed document could have surrounding prose silently discarded.
+    This counts each exact token independently, requires exactly one of each, and
+    requires the two regions to be well ordered and disjoint (not reversed, nested,
+    repeated, or crossed)."""
+    markers = (
+        ("baseline begin", BASELINE_BEGIN),
+        ("baseline end", BASELINE_END),
+        ("allocations begin", ALLOC_BEGIN),
+        ("allocations end", ALLOC_END),
+    )
+    offset = {}
+    for name, token in markers:
+        count = text.count(token)
+        if count != 1:
+            raise BaselineError("expected exactly one %s marker, found %d" % (name, count))
+        offset[token] = text.index(token)
+
+    baseline = (offset[BASELINE_BEGIN], offset[BASELINE_END] + len(BASELINE_END))
+    alloc = (offset[ALLOC_BEGIN], offset[ALLOC_END] + len(ALLOC_END))
+    if offset[BASELINE_BEGIN] >= offset[BASELINE_END]:
+        raise BaselineError("baseline end marker does not follow its begin marker")
+    if offset[ALLOC_BEGIN] >= offset[ALLOC_END]:
+        raise BaselineError("allocations end marker does not follow its begin marker")
+    # Disjoint: one region wholly before the other. Anything else is nested or crossed.
+    if not (baseline[1] <= alloc[0] or alloc[1] <= baseline[0]):
+        raise BaselineError("baseline and allocations generated regions overlap")
+
+
 def render(document_text, data):
     # Preserve the document's existing convention rather than imposing one.
-    newline = "\r\n" if "\r\n" in document_text else "\n"
+    newline = detect_newline(document_text)
+    # Reject any ambiguous marker layout before replacing anything, so a malformed
+    # document never has part of its prose discarded by a partial substitution.
+    validate_markers(document_text)
     text = replace_region(
         document_text, BASELINE_BEGIN, BASELINE_END, baseline_table(data, newline), newline
     )

@@ -4,6 +4,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
+#include <optional>
 #include <random>
 #include <string>
 #include <vector>
@@ -571,6 +573,93 @@ TEST(Differential, ReproducerFormatRoundTrips) {
     EXPECT_EQ(decoded[i].timestamp, original[i].timestamp) << "command " << i;
     EXPECT_EQ(decoded[i].party, original[i].party) << "command " << i;
   }
+}
+
+// At the representable-price endpoints the engine and the reference book
+// must agree on the rejection reason. The fringe of interest is the one-to-
+// tick_size-1 raw units just past an endpoint, where the truncating
+// representable() quotient still says true while the inclusive bounds say out of
+// range. The two implementations must both call that band_overflow, and an in-range
+// off-grid price off_tick. Full events are compared, not helper booleans.
+void expect_fringe_equivalent(const PriceConfig& price, const char* label) {
+  const std::int64_t lo = price.min_representable_raw();
+  const std::int64_t hi = price.max_representable_raw();
+  const std::int64_t ts = price.tick_size;
+  constexpr std::int64_t I64_MIN = std::numeric_limits<std::int64_t>::min();
+  constexpr std::int64_t I64_MAX = std::numeric_limits<std::int64_t>::max();
+
+  std::vector<std::int64_t> raws;
+  for (const std::int64_t off : {std::int64_t{0}, std::int64_t{1}, ts - 1, ts}) {
+    if (hi >= I64_MIN + off) {
+      raws.push_back(hi - off);
+    }
+    if (hi <= I64_MAX - off) {
+      raws.push_back(hi + off);
+    }
+    if (lo >= I64_MIN + off) {
+      raws.push_back(lo - off);
+    }
+    if (lo <= I64_MAX - off) {
+      raws.push_back(lo + off);
+    }
+  }
+
+  std::uint64_t id = 1;
+  for (const std::int64_t raw : raws) {
+    const bool in_range = raw >= lo && raw <= hi;
+    // Skip in-range, on-grid prices: those are accepted and placed, which the main
+    // differential already covers. This test is about rejection classification.
+    if (in_range && price.on_tick_boundary(Price{raw})) {
+      continue;
+    }
+
+    DiffEngine::Config config;
+    config.price = price;
+    config.arena_capacity = 1024;
+    config.max_cold_levels_per_side = 64;
+    config.initial_center = Ticks{0};
+
+    DiffEngine engine(config);
+    DiffReference reference(price);
+    DiffRing ring;
+    std::vector<ExecutionEvent> fast;
+    std::vector<ExecutionEvent> slow;
+
+    Command command;
+    command.type = CommandType::add;
+    command.order_type = OrderType::limit;
+    command.side = Side::buy;
+    command.id = OrderId{id++};
+    command.price = Price{raw};
+    command.quantity = Quantity{10};
+    command.timestamp = Timestamp{id};
+
+    engine.submit(command, ring);
+    reference.submit(command, slow);
+    ExecutionEvent event;
+    while (ring.pop(event)) {
+      fast.push_back(event);
+    }
+
+    const std::optional<Mismatch> mismatch = compare_events(fast, slow);
+    ASSERT_FALSE(mismatch.has_value())
+        << label << " raw=" << raw << ": " << (mismatch ? mismatch->description : std::string());
+  }
+}
+
+TEST(DifferentialBoundary, EngineAndReferenceClassifyFringesIdentically) {
+  expect_fringe_equivalent(
+      PriceConfig{.tick_size = 100, .price_scale = 10000, .base_price = 1000000},
+      "positive base, tick 100");
+  expect_fringe_equivalent(PriceConfig{.tick_size = 1, .price_scale = 10000, .base_price = 0},
+                           "zero base, unit tick");
+  expect_fringe_equivalent(
+      PriceConfig{.tick_size = 100, .price_scale = 10000, .base_price = -1000000},
+      "negative base, tick 100");
+  expect_fringe_equivalent(PriceConfig{.tick_size = std::numeric_limits<std::int64_t>::max() / 4,
+                                       .price_scale = 10000,
+                                       .base_price = 0},
+                           "int64-binding tick");
 }
 
 }  // namespace
