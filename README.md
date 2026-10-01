@@ -8,6 +8,12 @@ A low latency limit order book and matching engine in C++20, with a NASDAQ
 TotalView-ITCH 5.0 replay pipeline, a measurement-first benchmark harness, and a
 market making strategy simulator that trades against the replayed book.
 
+I built this as a student project to learn how exchanges match orders and what it
+takes to make C++ fast *and* prove it is correct. I worked through it in phases,
+each with something specific I wanted to understand, and wrote down what went wrong
+along the way. [LEARNING.md](LEARNING.md) is the short version of that journey, and
+the commit history tells it change by change.
+
 The engine is deterministic by construction: it reads no clock, consumes no
 randomness, performs no I/O, and allocates nothing after warmup. Every timestamp
 arrives as a field on an input command. The same command sequence therefore
@@ -158,8 +164,8 @@ process under the same conditions, so the ratio is the durable part:
 
 The last row has a history worth knowing. The flat book originally **lost** this
 query, 10.2 ns against the tree's 5.38 ns, because `std::map` caches its extreme
-element while a bitmap descent is three dependent loads. That was reported rather
-than buried, and then fixed by caching the final answer and repairing it lazily.
+element while a bitmap descent is three dependent loads. I reported that rather
+than burying it, and then fixed it by caching the final answer and repairing it lazily.
 The 0.26 ns is only about 0.10 ns above an empty loop, so the accurate claim is
 that the query is below what the harness can resolve rather than that it costs any
 particular number; a dedicated noise-floor benchmark exists to make that
@@ -354,7 +360,8 @@ optimistic model.
 | [DESIGN.md](DESIGN.md) | Every non-obvious decision, the alternatives considered, the reasoning, and the places this design is the wrong choice. The single source of truth. |
 | [BENCHMARKS.md](BENCHMARKS.md) | Measured results with the conditions that produced them, and what is wrong with them. |
 | [STRATEGY.md](STRATEGY.md) | The market maker, queue position estimation, P&L attribution, and the markout reading. |
-| [ROADMAP.md](ROADMAP.md) | Agreed but deferred work, and what is deliberately kept cheap. |
+| [LEARNING.md](LEARNING.md) | What I set out to learn in each phase, what went wrong, and what I took from it. |
+| [ROADMAP.md](ROADMAP.md) | Deferred work, and what is deliberately kept cheap. |
 | [site/README.md](site/README.md) | The results site: how to run it, where its data comes from, and how to deploy it. |
 | [data/README.md](data/README.md) | Market data provenance, and why the full capture is a release asset rather than a repository file. |
 
@@ -385,10 +392,10 @@ could not be met on any available host, an isolated core, is named wherever it
 changes what a number means. Every number, with the conditions that produced it, is
 in [BENCHMARKS.md](BENCHMARKS.md).
 
-As of 2026-09-23, a local `ctest --preset debug` registers 162 tests, 161 pass, and
-one is skipped: the differential regression replay stays skipped until a shrunk
-fixture is committed. Run the command yourself to confirm the count rather than
-trusting this line.
+A local `ctest --preset debug` registers 162 tests, 161 pass, and one is skipped:
+the differential regression replay stays skipped until a shrunk fixture is
+committed. Run the command yourself to confirm the count rather than trusting this
+line.
 
 ## Licence
 

@@ -398,8 +398,8 @@ if(OB_BUILD_BENCH)
   target_include_directories(ob_baseline_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test)
   target_link_libraries(ob_baseline_bench PRIVATE ob ob_flags ob_bench_flags benchmark::benchmark)
 
-  # Cross-version controlled benchmark driver. Built here from the
-  # current tree; the same source is compiled against the pre-hardening tree in a separate
+  # Cross-version controlled benchmark driver. Built here from the current tree;
+  # the same source is compiled against the pre-hardening tree in a separate
   # worktree so the only difference between the two arms is the engine.
   add_executable(ob_ab_v1_bench
     bench/ab_v1_bench.cpp)

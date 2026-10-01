@@ -114,6 +114,11 @@ export const LINKS: Array<{ label: string; file: string; blurb: string }> = [
     blurb: 'The market maker, queue position estimation, P&L attribution, and the markout reading.',
   },
   {
+    label: 'LEARNING.md',
+    file: 'LEARNING.md',
+    blurb: 'What I set out to learn in each phase, what went wrong, and what I took from it.',
+  },
+  {
     label: 'ROADMAP.md',
     file: 'ROADMAP.md',
     blurb: 'What is deliberately kept cheap, and why.',

@@ -1,6 +1,6 @@
 # Roadmap
 
-Work that is agreed but not yet done, with enough context to pick it up cold.
+Work I have decided on but not yet done, with enough context to pick it up cold.
 Everything here is deliberately deferred rather than forgotten. Items are removed
 from this file when they land, so anything still written down is still outstanding.
 
@@ -9,15 +9,12 @@ reasoning live in [DESIGN.md](DESIGN.md).
 
 ## Standing decisions
 
-**Repository visibility.** Prepared for public release. Phase 6's documentation work
-is complete and the repository is licensed under MIT, with the Nasdaq-sourced data
-excluded from that grant. Flipping the repository to public is the owner's remaining
-step and is deliberately left until this work is merged and CI is green. See LICENSE,
-NOTICE, and data/README.md.
+**Repository visibility.** Public, licensed under MIT, with the Nasdaq-sourced data
+excluded from that grant. See LICENSE, NOTICE, and data/README.md.
 
 **Effort allocation.** The four items below taught me the most relative to their
-cost, so they got disproportionate effort. Everything else is built
-to do its job without gold plating.
+cost, so they got disproportionate effort. Everything else is built to do its job
+without gold plating.
 
 | Item | Phase | Why it earns the effort |
 | --- | --- | --- |
@@ -116,13 +113,11 @@ the HdrHistogram latency harness, and the measurement discipline all landed.
 
 ### Phase 6, documentation
 
-The documentation work itself is done: the duplication the code review flagged
-is resolved, the design document has been audited against the code, and the README carries the
-headline table and a five command reproduction path.
+The documentation work itself is done: the duplicated rationale across documents
+is resolved, the design document has been audited against what was actually built,
+and the README carries the headline table and a short reproduction path.
 
-- **The repository is licensed under MIT and ready to go public.** Nothing in the
-  documentation blocks the flip; making it is the owner's remaining step, deferred
-  until this work is merged and CI is green.
+- **The repository is licensed under MIT.**
 - **The market data handling is defined.** The Nasdaq-sourced slice and the derived
   artifacts are excluded from the MIT grant and redistributed on the assumption that
   Nasdaq's permission is granted, subject to Nasdaq's terms, with the attribution
@@ -131,7 +126,7 @@ headline table and a five command reproduction path.
   `scripts/publish_dataset.sh` is still run deliberately rather than automatically,
   because publishing the complete archive is the larger ask of the two.
 
-The architecture diagram was reviewed and kept as an ASCII sketch. It fits in a
+I kept the architecture diagram as an ASCII sketch. It fits in a
 terminal, it survives a plain text diff, and it already shows the strategy layer
 feeding the same engine as the replay path, which is the one relationship a reader
 has to understand. A rendered image would look better and say the same thing while
@@ -139,7 +134,7 @@ being invisible to every tool this project is read with.
 
 ## The frontend
 
-Accepted from the third review. Steps 1 and 2 below are built and shipped: the
+Steps 1 and 2 below are built and shipped: the
 machine-readable artifacts and the static results site both exist (see `site/` and
 `site/README.md`). Step 3 remains deliberately deferred. The sequencing mattered
 more than the choice of framework, and it is recorded here as delivered rather than

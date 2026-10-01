@@ -384,7 +384,7 @@ TEST(Differential, SurvivesAWideSparseBook) {
 // Prices deliberately spread wider than the band, so a large fraction of the book
 // lives in cold storage at any moment.
 //
-// This configuration exists because a code review found a bug the entire
+// This configuration exists because a code review turned up a bug the entire
 // existing differential suite was blind to. Every other configuration uses a price
 // span of 2 to 900 ticks inside a 4096 level band, so no command sequence ever
 // combined fill-or-kill with cold levels. The liquidity precheck walked only the

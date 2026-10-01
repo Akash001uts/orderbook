@@ -1043,8 +1043,8 @@ precheck walked levels with `next_level_away`, which consulted only the band bit
 and returned nothing the moment it left the band. The match loop calls `best()`
 repeatedly, and `best()` does see cold levels, so the matcher would fill straight
 through liquidity the precheck could not count. A fill-or-kill the matcher would have
-filled in full was rejected as insufficient. Found by code review, not by the
-test suite, and that is the interesting part: every differential configuration used a
+filled in full was rejected as insufficient. Found by reading the code back, not by
+the test suite, and that is the interesting part: every differential configuration used a
 price span of 2 to 900 ticks inside a 4096 level band, so no command sequence ever
 combined fill-or-kill with cold levels. The three existing differential tests all pass
 against the buggy code. `next_level_away` now walks the union of the band and cold

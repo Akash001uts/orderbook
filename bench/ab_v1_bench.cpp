@@ -4,8 +4,8 @@
 // the public interface hardening and the engine after it, so the only difference between the two
 // arms is the engine implementation the include path resolves. It uses only the
 // public API both versions share (Engine, its Config, PriceConfig, Command, the
-// strong integer types) plus its own sinks, so it does not depend on anything B
-// added or removed. The point is to measure whether the bool-returning sink
+// strong integer types) plus its own sinks, so it does not depend on anything the
+// hardening added or removed. The point is to measure whether the bool-returning sink
 // contract and the representability check cost anything on the hot flat paths, for both
 // an always-accepting sink (where the overflow branch folds away) and a bounded one
 // (where it stays live).

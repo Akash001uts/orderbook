@@ -310,7 +310,7 @@ export interface SymbolBundle {
 }
 
 // The base is relative so the site works from a subdirectory as happily as from a
-// domain root, which matters because a portfolio may host it either way.
+// domain root, which matters because it may be hosted either way.
 const BASE = new URL('.', document.baseURI).href
 
 const cache = new Map<string, Promise<unknown>>()
