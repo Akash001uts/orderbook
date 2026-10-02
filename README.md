@@ -350,7 +350,7 @@ optimistic model.
 | `test/` | Unit, differential, and fuzz tests, plus the reference oracle |
 | `tools/` | Synthetic ITCH generator and the replay CLI |
 | `data/` | A committed slice of a real NASDAQ capture, see `data/README.md` |
-| `scripts/` | Fetch a NASDAQ sample day, publish a full capture as release assets |
+| `scripts/` | Fetch a NASDAQ sample day, regenerate the site artifacts, and optionally publish a capture as release assets |
 | `site/` | The static results site and the JSON artifacts it reads, see `site/README.md` |
 
 ## Documents
@@ -363,7 +363,7 @@ optimistic model.
 | [LEARNING.md](LEARNING.md) | What I set out to learn in each phase, what went wrong, and what I took from it. |
 | [ROADMAP.md](ROADMAP.md) | Deferred work, and what is deliberately kept cheap. |
 | [site/README.md](site/README.md) | The results site: how to run it, where its data comes from, and how to deploy it. |
-| [data/README.md](data/README.md) | Market data provenance, and why the full capture is a release asset rather than a repository file. |
+| [data/README.md](data/README.md) | Market data provenance, and how to get the full capture. |
 
 ## Scope
 

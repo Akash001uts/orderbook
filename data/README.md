@@ -54,10 +54,11 @@ root.
 
 ## The full dataset
 
-The complete capture is published as **GitHub release assets**, not committed to
-the repository. Both exist on purpose and neither makes the other redundant: the
-slice above is what makes `ctest` work on a fresh clone with no download, and the
-release is the complete dataset behind every finding in DESIGN.md.
+The complete capture is not part of this repository. The way to get it is
+`scripts/fetch_nasdaq_sample.sh`, which downloads it straight from NASDAQ (see
+below). The two serve different purposes: the slice above is what makes `ctest`
+work on a fresh clone with no download, and the full day is the dataset behind the
+findings in DESIGN.md.
 
 ### Why not commit it, and why compressing harder does not help
 
@@ -82,7 +83,7 @@ is the wrong answer anyway. It would put 2 GB into the git history permanently,
 so every clone of a source repository would drag it down forever, and GitHub's own
 guidance is explicit that repositories are not for bulk data.
 
-### What release assets give instead
+### Release assets, if it is ever republished
 
 A release asset can be 2 GB, it appears on the repository page, and it is not part
 of the git history, so a clone stays at a few megabytes. `scripts/publish_dataset.sh`
@@ -111,7 +112,7 @@ sample it reports 8 906 symbols and zero unknown message types.
 
 Publishing the complete archive as GitHub release assets is the more substantial
 ask of the two, so `scripts/publish_dataset.sh` is run deliberately rather than
-automatically. Run it with `PUBLISH_DRY_RUN=1` first to see the parts and checksums
+automatically, and it has not been run for this repository. Run it with `PUBLISH_DRY_RUN=1` first to see the parts and checksums
 without uploading anything. Either way, the same attribution and Nasdaq terms noted
 under the slice above apply to the full capture.
 
