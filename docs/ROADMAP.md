@@ -4,7 +4,7 @@ Work I have decided on but not yet done, with enough context to pick it up cold.
 Everything here is deliberately deferred rather than forgotten. Items are removed
 from this file when they land, so anything still written down is still outstanding.
 
-Progress and completed phases live in [README.md](README.md). Decisions and their
+Progress and completed phases live in [README.md](../README.md). Decisions and their
 reasoning live in [DESIGN.md](DESIGN.md).
 
 ## Standing decisions
@@ -121,7 +121,7 @@ and the README carries the headline table and a short reproduction path.
 - **The market data handling is defined.** The Nasdaq-sourced slice and the derived
   artifacts are excluded from the MIT grant and redistributed on the assumption that
   Nasdaq's permission is granted, subject to Nasdaq's terms, with the attribution
-  recorded in [data/README.md](data/README.md). Obtaining and retaining that
+  recorded in [data/README.md](../data/README.md). Obtaining and retaining that
   permission record is handled separately from this documentation.
   `scripts/publish_dataset.sh` is still run deliberately rather than automatically,
   because publishing the complete archive is the larger ask of the two.

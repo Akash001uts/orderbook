@@ -100,27 +100,27 @@ export const PROJECT = {
 export const LINKS: Array<{ label: string; file: string; blurb: string }> = [
   {
     label: 'DESIGN.md',
-    file: 'DESIGN.md',
+    file: 'docs/DESIGN.md',
     blurb: 'Every decision, the alternatives rejected, and a log of eight bugs the tests caught.',
   },
   {
     label: 'BENCHMARKS.md',
-    file: 'BENCHMARKS.md',
+    file: 'docs/BENCHMARKS.md',
     blurb: 'The measurement discipline, the baseline comparison, and what is still wrong with the numbers.',
   },
   {
     label: 'STRATEGY.md',
-    file: 'STRATEGY.md',
+    file: 'docs/STRATEGY.md',
     blurb: 'The market maker, queue position estimation, P&L attribution, and the markout reading.',
   },
   {
     label: 'LEARNING.md',
-    file: 'LEARNING.md',
+    file: 'docs/LEARNING.md',
     blurb: 'What I set out to learn in each phase, what went wrong, and what I took from it.',
   },
   {
     label: 'ROADMAP.md',
-    file: 'ROADMAP.md',
+    file: 'docs/ROADMAP.md',
     blurb: 'What is deliberately kept cheap, and why.',
   },
 ]

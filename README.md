@@ -11,7 +11,7 @@ market making strategy simulator that trades against the replayed book.
 I built this as a student project to learn how exchanges match orders and what it
 takes to make C++ fast *and* prove it is correct. I worked through it in phases,
 each with something specific I wanted to understand, and wrote down what went wrong
-along the way. [LEARNING.md](LEARNING.md) is the short version of that journey, and
+along the way. [LEARNING.md](docs/LEARNING.md) is the short version of that journey, and
 the commit history tells it change by change.
 
 The engine is deterministic by construction: it reads no clock, consumes no
@@ -33,7 +33,7 @@ rather than a smoke test.
 | CI | 16 jobs: GCC and Clang, ASan, UBSan, TSan, clang-tidy, clang-format, fuzzing |
 
 Every number comes with the conditions that produced it in
-[BENCHMARKS.md](BENCHMARKS.md), including the ones that are wrong. Everything above
+[BENCHMARKS.md](docs/BENCHMARKS.md), including the ones that are wrong. Everything above
 reproduces on a fresh clone from the committed 5.5 MB NASDAQ slice; see
 [Quick start](#quick-start).
 
@@ -143,7 +143,7 @@ data comes from and how to regenerate it.
 
 The headline `std::map` comparison shown on the site is read from a single
 canonical artifact, `site/data/bench/baseline.json`, which is also the source the
-baseline and allocation tables in [BENCHMARKS.md](BENCHMARKS.md) are rendered from
+baseline and allocation tables in [BENCHMARKS.md](docs/BENCHMARKS.md) are rendered from
 by `scripts/sync_benchmarks.py`. A CI job runs that script in `--check` mode, so the
 site, the document, and the artifact cannot disagree on those two comparison tables.
 Other numbers in the prose, such as the arena curve, are not covered by this guard.
@@ -185,7 +185,7 @@ The default is larger because peak book depth varies 62-fold across mainstream
 symbols on one ordinary day, from IWM at 434 live orders to AAPL at 27 097, so it is
 sized to the deepest measured name. A book known to be shallow should lower it and
 take the speed. Both numbers, and what the difference costs, are in
-[BENCHMARKS.md](BENCHMARKS.md).
+[BENCHMARKS.md](docs/BENCHMARKS.md).
 
 Absolute figures come from paired runs, because this machine drifted by up to 2.6x
 across a session on an unchanged binary. The ratios survive that; the nanoseconds
@@ -216,7 +216,7 @@ agree within a few nanoseconds, which is the evidence that the measurement is so
 rather than an artifact of one toolchain.
 
 Every condition, including the ones that are wrong, is in
-[BENCHMARKS.md](BENCHMARKS.md). The short version: the harness pins, warms, and
+[BENCHMARKS.md](docs/BENCHMARKS.md). The short version: the harness pins, warms, and
 verifies its clock, but no available host offers an isolated core, so percentiles
 up to p99.99 are sound and maximum values are not.
 
@@ -256,11 +256,11 @@ replayed: 2019-12-30, 11 958 712 messages, 8 906 symbols.
 It also found something: five of 92 705 QQQ adds are priced off a penny boundary,
 because ITCH prices are in hundredths of a cent and sub-penny prices occur. The
 trade-off between tick size and band churn is measured in
-[DESIGN.md](DESIGN.md).
+[DESIGN.md](docs/DESIGN.md).
 
 ### Strategy
 
-The strategy results are in [STRATEGY.md](STRATEGY.md), and the fill model is
+The strategy results are in [STRATEGY.md](docs/STRATEGY.md), and the fill model is
 stated before any P&L because every number is downstream of it. The baseline market
 maker loses money, and the attribution says why: with inventory skew disabled it had
 no way to get flat and carried a thousand shares through a dollar decline. Turning
@@ -350,6 +350,7 @@ optimistic model.
 | `test/` | Unit, differential, and fuzz tests, plus the reference oracle |
 | `tools/` | Synthetic ITCH generator and the replay CLI |
 | `data/` | A committed slice of a real NASDAQ capture, see `data/README.md` |
+| `docs/` | Design reasoning, benchmarks, strategy results, roadmap, and the learning log |
 | `scripts/` | Fetch a NASDAQ sample day, regenerate the site artifacts, and optionally publish a capture as release assets |
 | `site/` | The static results site and the JSON artifacts it reads, see `site/README.md` |
 
@@ -357,11 +358,11 @@ optimistic model.
 
 | | |
 | --- | --- |
-| [DESIGN.md](DESIGN.md) | Every non-obvious decision, the alternatives considered, the reasoning, and the places this design is the wrong choice. The single source of truth. |
-| [BENCHMARKS.md](BENCHMARKS.md) | Measured results with the conditions that produced them, and what is wrong with them. |
-| [STRATEGY.md](STRATEGY.md) | The market maker, queue position estimation, P&L attribution, and the markout reading. |
-| [LEARNING.md](LEARNING.md) | What I set out to learn in each phase, what went wrong, and what I took from it. |
-| [ROADMAP.md](ROADMAP.md) | Deferred work, and what is deliberately kept cheap. |
+| [DESIGN.md](docs/DESIGN.md) | Every non-obvious decision, the alternatives considered, the reasoning, and the places this design is the wrong choice. The single source of truth. |
+| [BENCHMARKS.md](docs/BENCHMARKS.md) | Measured results with the conditions that produced them, and what is wrong with them. |
+| [STRATEGY.md](docs/STRATEGY.md) | The market maker, queue position estimation, P&L attribution, and the markout reading. |
+| [LEARNING.md](docs/LEARNING.md) | What I set out to learn in each phase, what went wrong, and what I took from it. |
+| [ROADMAP.md](docs/ROADMAP.md) | Deferred work, and what is deliberately kept cheap. |
 | [site/README.md](site/README.md) | The results site: how to run it, where its data comes from, and how to deploy it. |
 | [data/README.md](data/README.md) | Market data provenance, and how to get the full capture. |
 
@@ -372,7 +373,7 @@ thread sharding, persistence or a write-ahead log, clustering, a live order-entr
 trading UI, and any live trading connection. There is a web results site (see
 [site/README.md](site/README.md)); what is out of scope is an interactive
 order-entry front end, not a web presence. The reasoning for each exclusion is
-recorded in [DESIGN.md](DESIGN.md).
+recorded in [DESIGN.md](docs/DESIGN.md).
 
 ## Project status
 
@@ -390,7 +391,7 @@ recorded in [DESIGN.md](DESIGN.md).
 Nothing is claimed here that has not been measured, and the one condition that
 could not be met on any available host, an isolated core, is named wherever it
 changes what a number means. Every number, with the conditions that produced it, is
-in [BENCHMARKS.md](BENCHMARKS.md).
+in [BENCHMARKS.md](docs/BENCHMARKS.md).
 
 A local `ctest --preset debug` registers 162 tests, 161 pass, and one is skipped:
 the differential regression replay stays skipped until a shrunk fixture is

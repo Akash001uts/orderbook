@@ -28,7 +28,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ARTIFACT = REPO_ROOT / "site" / "data" / "bench" / "baseline.json"
-DOCUMENT = REPO_ROOT / "BENCHMARKS.md"
+DOCUMENT = REPO_ROOT / "docs" / "BENCHMARKS.md"
 
 REQUIRED_ROW_IDS = ("add", "cancel", "match", "best_bid")
 
